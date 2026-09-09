@@ -1,0 +1,18 @@
+server:
+  http_listen_port: 9080  # Porta interna do Promtail (não precisamos expor)
+
+# Pra onde o Promtail manda os logs que coleta
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  # Varre todos os containers Docker e coleta os logs automaticamente
+  - job_name: docker
+    pipeline_stages:
+      - docker: {}  # Parser nativo pra formato de log do Docker (JSON)
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: docker
+          __path__: /var/lib/docker/containers/*/*log  # Glob que pega os logs de TODOS os containers

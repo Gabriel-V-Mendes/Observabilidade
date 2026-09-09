@@ -1,0 +1,36 @@
+groups:
+  # --- Alertas de SLO da aplicação ---
+  - name: app_slos
+    rules:
+      # Se mais de 1% das requisições forem erro 500, tem algo errado na app
+      - alert: HighErrorRate
+        expr: rate(app_requests_total{http_status="500"}[1m]) / rate(app_requests_total[1m]) > 0.01
+        for: 1m  # Espera 1 min antes de disparar — evita alarme falso por pico isolado
+        labels:
+          severity: critical
+        annotations:
+          summary: "Violação de SLO: Taxa de Erro > 1%"
+          description: "A API está retornando mais de 1% de erros HTTP 500 no último minuto."
+
+      # Se a latência do p99 passar de 500ms, os usuários estão sentindo lentidão
+      - alert: HighLatencyP99
+        expr: histogram_quantile(0.99, rate(app_request_duration_seconds_bucket[1m])) > 0.500
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Violação de SLO: Latência p99 > 500ms"
+          description: "99% das requisições estão levando mais de 500ms. Usuários estão sofrendo lentidão."
+
+  # --- Alertas de infraestrutura ---
+  - name: infra_alerts
+    rules:
+      # Se o disco passar de 80%, é hora de limpar ou expandir antes que lote
+      - alert: HighDiskUsage
+        expr: (node_filesystem_size_bytes{mountpoint="/"} - node_filesystem_free_bytes{mountpoint="/"}) / node_filesystem_size_bytes{mountpoint="/"} * 100 > 80
+        for: 5m  # 5 min de margem — disco não enche do nada
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disco Host acima de 80%"
+          description: "O servidor host está ficando sem espaço em disco."

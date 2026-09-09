@@ -1,0 +1,29 @@
+global:
+  scrape_interval: 15s  # De quanto em quanto tempo o Prometheus puxa métricas dos targets
+
+# Arquivo com as regras matemáticas que definem "o que é um problema"
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+# Quando uma regra dispara, o alerta é enviado pra cá
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+
+# Lista de alvos que o Prometheus vai "raspar" as métricas
+scrape_configs:
+  # Monitora a si mesmo (útil pra saber se o próprio Prometheus tá saudável)
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Puxa as métricas da nossa API FastAPI via /metrics
+  - job_name: 'fastapi-app'
+    static_configs:
+      - targets: ['app:8000']  # "app" é o nome do serviço no docker-compose
+
+  # Puxa métricas do host (CPU, RAM, disco) via Node Exporter
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']

@@ -1,0 +1,16 @@
+apiVersion: 1
+datasources:
+  # Prometheus — fonte principal de métricas (counters, histogramas, gauges)
+  - name: Prometheus
+    type: prometheus
+    access: proxy        # Grafana faz a requisição pro Prometheus no backend (mais seguro)
+    url: http://prometheus:9090
+    isDefault: true      # Quando criar um painel novo, já vem com esse selecionado
+    editable: false      # Bloqueia edição na UI — a verdade tá no YAML (IaC)
+
+  # Loki — fonte de logs. Permite consultar logs dos containers direto no Grafana
+  - name: Loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    editable: false

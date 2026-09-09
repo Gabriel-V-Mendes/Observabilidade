@@ -1,0 +1,23 @@
+global:
+  resolve_timeout: 5m  # Tempo que espera antes de considerar um alerta "resolvido"
+
+route:
+  receiver: 'slack-notifications'  # Todo alerta cai aqui por padrão
+  group_by: ['alertname']          # Agrupa pelo nome — evita 50 mensagens iguais no Slack
+  group_wait: 10s       # Espera 10s juntando alertas antes de mandar a primeira msg
+  group_interval: 1m    # Depois da primeira, manda atualizações a cada 1 min
+  repeat_interval: 1h   # Se continuar falhando, lembra o time a cada 1 hora
+
+receivers:
+  - name: 'slack-notifications'
+    slack_configs:
+      # Coloque aqui o Webhook real do Slack — esse é um placeholder
+      - api_url: 'https://exemplo.com/slack-webhook-falso'
+        channel: '#alertas-producao'
+        send_resolved: true  # Manda msg verde quando o problema resolver também
+        title: '[{{ .Status | toUpper }}] {{ .GroupLabels.alertname }}'
+        text: >-
+          {{ range .Alerts }}
+            *Descrição:* {{ .Annotations.description }}
+            *Severidade:* {{ .Labels.severity }}
+          {{ end }}

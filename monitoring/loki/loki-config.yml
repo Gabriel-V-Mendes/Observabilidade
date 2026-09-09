@@ -1,0 +1,29 @@
+# Lab local — sem autenticação, senão complica demais pra teste
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+
+common:
+  ring:
+    instance_addr: 127.0.0.1
+    kvstore:
+      store: inmemory  # Armazena o ring em memória (pra produção, usar etcd ou consul)
+  replication_factor: 1  # Instância única — sem réplica nesse lab
+  path_prefix: /tmp/loki
+
+# Onde o Loki guarda os chunks de log no disco
+storage_config:
+  filesystem:
+    directory: /tmp/loki/chunks
+
+# Define como os dados são organizados internamente
+schema_config:
+  configs:
+    - from: 2020-10-24
+      store: tsdb          # TSDB é o engine mais recente e performático do Loki
+      object_store: filesystem
+      schema: v13          # Versão do schema — v13 é a mais recente
+      index:
+        prefix: index_
+        period: 24h        # Cria um novo índice a cada 24h
