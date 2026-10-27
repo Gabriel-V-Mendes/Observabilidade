@@ -1,0 +1,87 @@
+name: Observability & SLO CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  # ============================================================================
+  # 1. Segurança: Gitleaks (histórico completo) + Governança de Runbooks
+  # ============================================================================
+  security-and-policy:
+    name: Secret Scan & Runbook Policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Gitleaks (histórico completo)
+        run: |
+          docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.30.1 \
+            git /repo --redact --verbose --exit-code 1
+
+      - name: Verificar que todo alerta possui runbook_url e arquivo de runbook válido
+        run: |
+          ALERT_COUNT=$(grep -cE '^[[:space:]]*- alert:' monitoring/prometheus/alerts.yml)
+          RUNBOOK_COUNT=$(grep -c 'runbook_url:' monitoring/prometheus/alerts.yml)
+          test "$ALERT_COUNT" -eq "$RUNBOOK_COUNT"
+          for rb in $(grep -oE 'docs/runbooks/[a-z0-9_-]+\.md' monitoring/prometheus/alerts.yml | sort -u); do
+            test -f "$rb"
+          done
+
+  # ============================================================================
+  # 2. Lint & Validação de Regras (Ruff + promtool + amtool)
+  # ============================================================================
+  lint-and-validate:
+    name: Ruff, Promtool & Amtool Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Executar make lint (Ruff + promtool + amtool)
+        run: make lint
+
+      - name: Executar testes unitários da API instrumentada (Pytest >= 90% coverage)
+        run: make test
+
+  # ============================================================================
+  # 3. Teste E2E da Stack Completa (Docker Compose + Alloy + Loki + Prometheus + Incidente)
+  # ============================================================================
+  e2e-observability:
+    name: E2E Stack, Smoke Test & Incident TTD
+    runs-on: ubuntu-latest
+    needs: [security-and-policy, lint-and-validate]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Subir stack com um comando (make up)
+        run: make up
+
+      - name: Executar Smoke Test ponta a ponta (make smoke)
+        run: make smoke
+
+      - name: Simular incidente e medir TTD/TTR (make incident)
+        run: make incident
+
+      - name: Derrubar stack
+        if: always()
+        run: make down
