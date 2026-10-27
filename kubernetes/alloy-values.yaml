@@ -1,0 +1,74 @@
+# ==============================================================================
+# Grafana Alloy — Helm Values para Coleta de Logs em Kubernetes (Substitui Promtail)
+#
+# Instalação oficial via Helm:
+#   helm repo add grafana https://grafana.github.io/helm-charts
+#   helm repo update
+#   helm upgrade --install alloy grafana/alloy \
+#     --namespace monitoring --create-namespace \
+#     -f kubernetes/alloy-values.yaml
+# ==============================================================================
+
+controller:
+  type: daemonset
+
+alloy:
+  mounts:
+    varlog: true
+    dockercontainers: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+  configMap:
+    create: true
+    content: |
+      logging {
+        level  = "info"
+        format = "logfmt"
+      }
+
+      // 1. Descobre todos os Pods do cluster Kubernetes
+      discovery.kubernetes "pods" {
+        role = "pod"
+      }
+
+      // 2. Padroniza labels Kubernetes (namespace, pod, container, app)
+      discovery.relabel "pod_logs" {
+        targets = discovery.kubernetes.pods.targets
+
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label  = "namespace"
+        }
+
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          target_label  = "pod"
+        }
+
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          target_label  = "container"
+        }
+
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name"]
+          target_label  = "app"
+        }
+      }
+
+      // 3. Coleta logs dos Pods via API do Kubernetes e envia para o Loki
+      loki.source.kubernetes "pod_logs" {
+        targets       = discovery.relabel.pod_logs.output
+        forward_to    = [loki.write.cluster_loki.receiver]
+      }
+
+      loki.write "cluster_loki" {
+        endpoint {
+          url = "http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push"
+        }
+      }
