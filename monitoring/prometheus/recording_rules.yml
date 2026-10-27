@@ -1,0 +1,80 @@
+# ==============================================================================
+# Recording Rules — Pré-cálculo de SLIs, Error Budget e Burn Rate (Padrão Google SRE)
+#
+# Definição oficial dos SLOs da API:
+#   - SLO de Disponibilidade: 99.5% (Error Budget = 0.5% = 0.005)
+#   - SLO de Latência p95:    < 300ms (0.300s)
+#   - SLO de Latência p99:    < 500ms (0.500s)
+#
+# Fórmula do Burn Rate:
+#   Burn Rate = (Taxa de Erro Atual) / (1 - SLO) = error_ratio / 0.005
+#   - Burn Rate = 1.0x  -> Consome 100% do orçamento exatamente no fim da janela
+#   - Burn Rate = 2.0x  -> Consome o orçamento na metade do tempo (alerta Slow Burn)
+#   - Burn Rate = 14.4x -> Consome 2% de todo o orçamento mensal em 1 hora (alerta Fast Burn)
+# ==============================================================================
+groups:
+  - name: slo_recording_rules
+    interval: 5s
+    rules:
+      # Taxa total de requisições por segundo (Rate)
+      - record: job:app_requests:rate1m
+        expr: sum(rate(app_requests_total[1m]))
+
+      # Proporção de erros HTTP 5xx no último 1 minuto (0.0 a 1.0)
+      - record: job:slo_error_ratio:rate1m
+        expr: |
+          clamp_min(
+            sum(rate(app_requests_total{http_status=~"5.."}[1m]))
+            /
+            (sum(rate(app_requests_total[1m])) > 0),
+            0
+          ) or vector(0)
+
+      # Proporção de erros HTTP 5xx nos últimos 5 minutos (0.0 a 1.0)
+      - record: job:slo_error_ratio:rate5m
+        expr: |
+          clamp_min(
+            sum(rate(app_requests_total{http_status=~"5.."}[5m]))
+            /
+            (sum(rate(app_requests_total[5m])) > 0),
+            0
+          ) or vector(0)
+
+      # SLI de Disponibilidade (%) no último 1 minuto
+      - record: job:sli_availability:percent1m
+        expr: (1 - job:slo_error_ratio:rate1m) * 100
+
+      # Error Budget Restante (%) considerando meta de 99.5% (orçamento de 0.5%)
+      - record: job:slo_error_budget_remaining:percent5m
+        expr: |
+          clamp_min(
+            clamp_max(
+              ((1 - job:slo_error_ratio:rate5m) * 100 - 99.5) / 0.5 * 100,
+              100
+            ),
+            0
+          )
+
+      # Burn Rate de Curto Prazo (1m) sobre o Error Budget de 0.5% (0.005)
+      - record: job:slo_error_burn_rate:ratio_rate1m
+        expr: job:slo_error_ratio:rate1m / 0.005
+
+      # Burn Rate de Médio Prazo (5m) sobre o Error Budget de 0.5% (0.005)
+      - record: job:slo_error_burn_rate:ratio_rate5m
+        expr: job:slo_error_ratio:rate5m / 0.005
+
+      # SLI de Latência p95 (segundos)
+      - record: job:sli_latency_p95:seconds1m
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(app_request_duration_seconds_bucket[1m])) by (le)
+          )
+
+      # SLI de Latência p99 (segundos)
+      - record: job:sli_latency_p99:seconds1m
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum(rate(app_request_duration_seconds_bucket[1m])) by (le)
+          )

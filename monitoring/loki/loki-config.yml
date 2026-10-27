@@ -1,29 +1,44 @@
-# Lab local — sem autenticação, senão complica demais pra teste
+# ==============================================================================
+# Grafana Loki 3.4+ — Configuração Single-Node com Engine TSDB (Schema v13)
+# ==============================================================================
 auth_enabled: false
 
 server:
   http_listen_port: 3100
+  grpc_listen_port: 9096
+  log_level: warn
 
 common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
   ring:
-    instance_addr: 127.0.0.1
     kvstore:
-      store: inmemory  # Armazena o ring em memória (pra produção, usar etcd ou consul)
-  replication_factor: 1  # Instância única — sem réplica nesse lab
-  path_prefix: /tmp/loki
+      store: inmemory
 
-# Onde o Loki guarda os chunks de log no disco
-storage_config:
-  filesystem:
-    directory: /tmp/loki/chunks
-
-# Define como os dados são organizados internamente
 schema_config:
   configs:
-    - from: 2020-10-24
-      store: tsdb          # TSDB é o engine mais recente e performático do Loki
+    - from: 2024-01-01
+      store: tsdb
       object_store: filesystem
-      schema: v13          # Versão do schema — v13 é a mais recente
+      schema: v13
       index:
         prefix: index_
-        period: 24h        # Cria um novo índice a cada 24h
+        period: 24h
+
+limits_config:
+  allow_structured_metadata: true
+  reject_old_samples: true
+  reject_old_samples_max_age: 168h
+  retention_period: 168h
+
+compactor:
+  working_directory: /loki/compactor
+  compaction_interval: 10m
+  retention_enabled: true
+  retention_delete_delay: 2h
+  delete_request_store: filesystem

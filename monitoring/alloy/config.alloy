@@ -1,0 +1,98 @@
+// =============================================================================
+// Grafana Alloy — Pipeline de Coleta de Logs para o Loki (Substituto do Promtail)
+//
+// O Promtail foi descontinuado no Loki 3.7 em favor do Grafana Alloy (coletor
+// unificado baseado em OpenTelemetry + sintaxe declarativa River).
+//
+// Fluxo deste pipeline:
+//   1. discovery.docker     -> descobre todos os containers ativos via Docker socket
+//   2. discovery.relabel    -> extrai labels limpos (container, service_name, stream)
+//   3. loki.source.docker   -> lê o stream de logs dos containers em tempo real
+//   4. loki.process         -> faz parse dos logs JSON da FastAPI (level, status_code, path)
+//   5. loki.write           -> envia em lote (push) para a API do Loki (:3100)
+// =============================================================================
+
+logging {
+  level  = "info"
+  format = "logfmt"
+}
+
+// 1. Descobre automaticamente todos os containers Docker em execução no host
+discovery.docker "containers" {
+  host             = "unix:///var/run/docker.sock"
+  refresh_interval = "5s"
+}
+
+// 2. Padroniza metadados do Docker como labels indexáveis no Loki
+discovery.relabel "containers" {
+  targets = discovery.docker.containers.targets
+
+  // Remove a barra inicial "/" do nome do container (ex.: "/fastapi-app" -> "fastapi-app")
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+
+  // Extrai o nome do serviço do Docker Compose (ex.: "app", "prometheus", "loki")
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service_name"
+  }
+
+  // Identifica stdout vs stderr
+  rule {
+    source_labels = ["__meta_docker_container_log_stream"]
+    target_label  = "stream"
+  }
+
+  // Define label fixo do coletor para rastreabilidade
+  rule {
+    replacement  = "alloy-docker"
+    target_label = "job"
+  }
+}
+
+// 3. Coleta os logs dos containers descobertos e encaminha para o estágio de processamento
+loki.source.docker "containers" {
+  host          = "unix:///var/run/docker.sock"
+  targets       = discovery.docker.containers.targets
+  relabel_rules = discovery.relabel.containers.rules
+  forward_to    = [loki.process.parse_json.receiver]
+}
+
+// 4. Processa logs JSON estruturados emitidos pela FastAPI sem quebrar logs texto dos demais containers
+loki.process "parse_json" {
+  stage.match {
+    selector = "{container=\"fastapi-app\"}"
+
+    stage.json {
+      expressions = {
+        level       = "level",
+        method      = "method",
+        endpoint    = "endpoint",
+        status_code = "status_code",
+        duration_ms = "duration_ms",
+        request_id  = "request_id",
+      }
+    }
+
+    // Promove apenas campos de baixa cardinalidade para labels do Loki
+    stage.labels {
+      values = {
+        level    = "",
+        method   = "",
+        endpoint = "",
+      }
+    }
+  }
+
+  forward_to = [loki.write.loki_local.receiver]
+}
+
+// 5. Envia os logs enriquecidos para o Grafana Loki
+loki.write "loki_local" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

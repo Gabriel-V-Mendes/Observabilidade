@@ -1,101 +1,207 @@
+# ==============================================================================
+# Docker Compose — Stack Completa de Observabilidade & SLOs
+#
+# Mudanças em relação à versão legada:
+#   1. Saiu o Promtail (descontinuado) -> Entrou o Grafana Alloy (`grafana/alloy:v1.7.1`)
+#   2. Todas as imagens têm versão fixada (zero `:latest`)
+#   3. Todos os serviços possuem healthchecks/limites de recursos, permitindo subir
+#      e validar toda a plataforma com um único comando:
+#        docker compose up -d --build --wait
+# ==============================================================================
 services:
-  # Nossa API — o coração do projeto. Tudo que a gente monitora começa aqui.
+  # 1. API FastAPI instrumentada (Métricas RED + Logs Estruturados JSON)
   app:
-    build: ./app
+    build:
+      context: ./app
+      dockerfile: Dockerfile
     container_name: fastapi-app
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
+    environment:
+      - APP_NAME=${APP_NAME:-observability-api}
+      - APP_VERSION=${APP_VERSION:-2.0.0}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
+    restart: unless-stopped
     networks:
       - observability_net
 
-  # Prometheus — o motor de métricas. A cada 15s ele "raspa" os dados da API e do host.
-  # Também avalia as regras de alerta e manda pro Alertmanager quando algo quebra.
+  # 2. Prometheus — Coleta de métricas, Recording Rules de SLI/SLO e motor de alertas
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.2.1
     container_name: prometheus
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     volumes:
-      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
-      - ./monitoring/prometheus/alerts.yml:/etc/prometheus/alerts.yml  # Regras de SLO
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/recording_rules.yml:/etc/prometheus/recording_rules.yml:ro
+      - ./monitoring/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=7d"
+      - "--web.enable-lifecycle"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9090/-/healthy"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 512M
+    restart: unless-stopped
     networks:
       - observability_net
 
-  # Node Exporter — expõe métricas da máquina host (CPU, RAM, disco).
-  # Sem ele, a gente só vê a app mas não vê se o servidor tá sufocando.
+  # 3. Node Exporter — Métricas de hardware e SO do host (CPU, RAM, Disco, Rede)
   node-exporter:
-    image: prom/node-exporter:latest
+    image: prom/node-exporter:v1.9.0
     container_name: node-exporter
     ports:
-      - "9100:9100"
-    networks:
-      - observability_net
-
-  # Alertmanager — o carteiro dos alertas. Recebe do Prometheus, agrupa pra não
-  # fazer spam, e despacha pro Slack (ou qualquer outro canal).
-  alertmanager:
-    image: prom/alertmanager:latest
-    container_name: alertmanager
-    volumes:
-      - ./monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml
+      - "127.0.0.1:9100:9100"
     command:
-      - '--config.file=/etc/alertmanager/alertmanager.yml'
-    ports:
-      - "9093:9093"
-    networks:
-      - observability_net
-
-  # Grafana — a TV do time. Junta métricas + logs numa interface bonita com dashboards.
-  # Já sobe pré-configurado via provisioning (sem precisar clicar nada na UI).
-  grafana:
-    image: grafana/grafana:latest
-    container_name: grafana
-    ports:
-      - "3000:3000"
+      - "--path.rootfs=/host"
     volumes:
-      # Provisioning automático — datasources e dashboards como código (IaC)
-      - ./monitoring/grafana/provisioning/datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml
-      - ./monitoring/grafana/provisioning/dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml
-      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin  # Em produção, trocar por variável de ambiente segura
-    depends_on:
-      - prometheus
-      - loki
+      - /:/host:ro,rslave
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9100/metrics"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+    restart: unless-stopped
     networks:
       - observability_net
 
-  # Loki — o banco de logs. Diferente do Elasticsearch, ele indexa só os metadados
-  # (labels), não o texto inteiro. Por isso é muito mais leve.
+  # 4. Alertmanager — Deduplicação, agrupamento, inibição e roteamento (Webhook/Slack/Discord/Email)
+  alertmanager:
+    image: prom/alertmanager:v0.28.0
+    container_name: alertmanager
+    ports:
+      - "127.0.0.1:9093:9093"
+    volumes:
+      - ./monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9093/-/healthy"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+    restart: unless-stopped
+    networks:
+      - observability_net
+
+  # 5. Grafana Loki — Agregador de logs indexado por labels (Schema v13 TSDB)
   loki:
-    image: grafana/loki:latest
+    image: grafana/loki:3.4.2
     container_name: loki
     ports:
-      - "3100:3100"
+      - "127.0.0.1:3100:3100"
     volumes:
-      - ./monitoring/loki/loki-config.yml:/etc/loki/local-config.yaml
-    command: -config.file=/etc/loki/local-config.yaml
+      - ./monitoring/loki/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - loki_data:/loki
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 512M
+    restart: unless-stopped
     networks:
       - observability_net
 
-  # Promtail — o agente que coleta logs dos containers e manda pro Loki.
-  # Precisa rodar como root pra ter permissão de ler a pasta de logs do Docker.
-  promtail:
-    image: grafana/promtail:latest
-    container_name: promtail
-    user: root  # Sem isso, não consegue ler /var/lib/docker/containers
+  # 6. Grafana Alloy — Coletor moderno de telemetria (substitui o Promtail descontinuado)
+  alloy:
+    image: grafana/alloy:v1.7.1
+    container_name: alloy
+    user: root
+    ports:
+      - "127.0.0.1:12345:12345"
     volumes:
-      - /var/lib/docker/containers:/var/lib/docker/containers:ro  # Somente leitura
-      - ./monitoring/promtail/promtail-config.yml:/etc/promtail/config.yml
-    command: -config.file=/etc/promtail/config.yml
+      - ./monitoring/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy_data:/var/lib/alloy/data
+    command:
+      - "run"
+      - "--server.http.listen-addr=0.0.0.0:12345"
+      - "--storage.path=/var/lib/alloy/data"
+      - "/etc/alloy/config.alloy"
     depends_on:
-      - loki  # Espera o Loki subir antes, senão o push falha
+      - loki
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
+    restart: unless-stopped
     networks:
       - observability_net
 
-# Rede interna — todos os containers se enxergam pelo nome do serviço (ex: "prometheus:9090")
+  # 7. Grafana — Visualização com Datasources e Dashboards provisionados via código (IaC)
+  grafana:
+    image: grafana/grafana:11.5.2
+    container_name: grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./monitoring/grafana/provisioning/datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
+      - ./monitoring/grafana/provisioning/dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:ro
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards-json:ro
+      - grafana_data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GF_SECURITY_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GF_SECURITY_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      loki:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 384M
+    restart: unless-stopped
+    networks:
+      - observability_net
+
+volumes:
+  prometheus_data:
+  loki_data:
+  alloy_data:
+  grafana_data:
+
 networks:
   observability_net:
     driver: bridge

@@ -1,16 +1,24 @@
+# ==============================================================================
+# Grafana Datasources as Code — Prometheus (Métricas) + Loki (Logs via Alloy)
+# Fixamos os UIDs (`prometheus` e `loki`) para vinculação determinística nos JSONs.
+# ==============================================================================
 apiVersion: 1
 datasources:
-  # Prometheus — fonte principal de métricas (counters, histogramas, gauges)
   - name: Prometheus
+    uid: prometheus
     type: prometheus
-    access: proxy        # Grafana faz a requisição pro Prometheus no backend (mais seguro)
+    access: proxy
     url: http://prometheus:9090
-    isDefault: true      # Quando criar um painel novo, já vem com esse selecionado
-    editable: false      # Bloqueia edição na UI — a verdade tá no YAML (IaC)
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: "5s"
 
-  # Loki — fonte de logs. Permite consultar logs dos containers direto no Grafana
   - name: Loki
+    uid: loki
     type: loki
     access: proxy
     url: http://loki:3100
     editable: false
+    jsonData:
+      maxLines: 1000

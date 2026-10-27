@@ -1,36 +1,133 @@
+# ==============================================================================
+# Regras de Alerta — SLOs, Queima de Error Budget, Latência (p95/p99) e Infraestrutura
+#
+# Princípio SRE: "Alerta sem ação é ruído."
+# Toda regra abaixo possui obrigatoriamente a anotação `runbook_url` apontando
+# para o procedimento operacional padrão em `docs/runbooks/`.
+# ==============================================================================
 groups:
-  # --- Alertas de SLO da aplicação ---
-  - name: app_slos
+  # ----------------------------------------------------------------------------
+  # 1. Disponibilidade de Componentes (Detecção de Queda / Outage)
+  # ----------------------------------------------------------------------------
+  - name: component_availability
+    interval: 5s
     rules:
-      # Se mais de 1% das requisições forem erro 500, tem algo errado na app
-      - alert: HighErrorRate
-        expr: rate(app_requests_total{http_status="500"}[1m]) / rate(app_requests_total[1m]) > 0.01
-        for: 1m  # Espera 1 min antes de disparar — evita alarme falso por pico isolado
+      - alert: TargetDown
+        expr: up{job=~"fastapi-app|node-exporter|loki|grafana-alloy"} == 0
+        for: 10s
         labels:
           severity: critical
+          category: availability
         annotations:
-          summary: "Violação de SLO: Taxa de Erro > 1%"
-          description: "A API está retornando mais de 1% de erros HTTP 500 no último minuto."
+          summary: "Componente indisponível: {{ $labels.job }} ({{ $labels.instance }})"
+          description: "O alvo {{ $labels.job }} ({{ $labels.instance }}) está inacessível para scrape do Prometheus há mais de 10 segundos."
+          runbook_url: "https://github.com/Gabriel-V-Mendes/Observabilidade/blob/main/docs/runbooks/target-down.md"
 
-      # Se a latência do p99 passar de 500ms, os usuários estão sentindo lentidão
-      - alert: HighLatencyP99
-        expr: histogram_quantile(0.99, rate(app_request_duration_seconds_bucket[1m])) > 0.500
+  # ----------------------------------------------------------------------------
+  # 2. Alertas de Queima de Error Budget (Multi-Window Burn Rate — SLO 99.5%)
+  # ----------------------------------------------------------------------------
+  - name: slo_error_budget_burn
+    interval: 5s
+    rules:
+      # Fast Burn (14.4x): taxa de erro > 7.2% (14.4 * 0.5%). Consome todo o budget mensal em ~2 dias.
+      - alert: SLOErrorBudgetBurnFast
+        expr: job:slo_error_burn_rate:ratio_rate1m > 14.4 and job:app_requests:rate1m > 0.1
+        for: 15s
+        labels:
+          severity: critical
+          category: slo-burn
+          slo: availability-99.5
+        annotations:
+          summary: "Queima Crítica de Error Budget (Fast Burn > 14.4x)"
+          description: "A API está queimando o Error Budget de 0.5% a uma velocidade de {{ $value | printf \"%.1f\" }}x (taxa de erro 5xx crítica)."
+          runbook_url: "https://github.com/Gabriel-V-Mendes/Observabilidade/blob/main/docs/runbooks/error-budget-burn.md"
+
+      # Slow Burn (2.0x): taxa de erro > 1.0% (2 * 0.5%) sustentada.
+      - alert: SLOErrorBudgetBurnSlow
+        expr: job:slo_error_burn_rate:ratio_rate5m > 2.0 and job:app_requests:rate1m > 0.1
         for: 1m
         labels:
           severity: warning
+          category: slo-burn
+          slo: availability-99.5
         annotations:
-          summary: "Violação de SLO: Latência p99 > 500ms"
-          description: "99% das requisições estão levando mais de 500ms. Usuários estão sofrendo lentidão."
+          summary: "Queima Contínua de Error Budget (Slow Burn > 2x)"
+          description: "O consumo do Error Budget nos últimos 5 minutos está em {{ $value | printf \"%.1f\" }}x acima do limite sustentável."
+          runbook_url: "https://github.com/Gabriel-V-Mendes/Observabilidade/blob/main/docs/runbooks/error-budget-burn.md"
 
-  # --- Alertas de infraestrutura ---
-  - name: infra_alerts
+  # ----------------------------------------------------------------------------
+  # 3. Alertas de Taxa de Erros e Latência (p95 e p99) da API
+  # ----------------------------------------------------------------------------
+  - name: api_red_slos
+    interval: 5s
     rules:
-      # Se o disco passar de 80%, é hora de limpar ou expandir antes que lote
-      - alert: HighDiskUsage
-        expr: (node_filesystem_size_bytes{mountpoint="/"} - node_filesystem_free_bytes{mountpoint="/"}) / node_filesystem_size_bytes{mountpoint="/"} * 100 > 80
-        for: 5m  # 5 min de margem — disco não enche do nada
+      # Taxa de erro HTTP 5xx acima de 1%
+      - alert: HighErrorRate
+        expr: job:slo_error_ratio:rate1m > 0.01 and job:app_requests:rate1m > 0.1
+        for: 20s
+        labels:
+          severity: critical
+          category: error-rate
+        annotations:
+          summary: "Violação de SLO: Taxa de Erro HTTP 5xx > 1%"
+          description: "A API está retornando {{ $value | humanizePercentage }} de erros HTTP 5xx no último minuto."
+          runbook_url: "https://github.com/Gabriel-V-Mendes/Observabilidade/blob/main/docs/runbooks/high-error-rate.md"
+
+      # Latência p95 > 300ms (0.300s)
+      - alert: HighLatencyP95
+        expr: job:sli_latency_p95:seconds1m > 0.300 and job:app_requests:rate1m > 0.1
+        for: 20s
         labels:
           severity: warning
+          category: latency
+          slo: latency-p95-300ms
         annotations:
-          summary: "Disco Host acima de 80%"
-          description: "O servidor host está ficando sem espaço em disco."
+          summary: "Violação de SLO: Latência p95 > 300ms"
+          description: "O percentil 95 de latência da API atingiu {{ $value | printf \"%.3f\" }}s (limite do SLO: 0.300s)."
+          runbook_url: "https://github.com/Gabriel-V-Mendes/Observabilidade/blob/main/docs/runbooks/high-latency.md"
+
+      # Latência p99 > 500ms (0.500s)
+      - alert: HighLatencyP99
+        expr: job:sli_latency_p99:seconds1m > 0.500 and job:app_requests:rate1m > 0.1
+        for: 20s
+        labels:
+          severity: critical
+          category: latency
+          slo: latency-p99-500ms
+        annotations:
+          summary: "Violação Crítica de SLO: Latência p99 > 500ms"
+          description: "O percentil 99 de latência da API atingiu {{ $value | printf \"%.3f\" }}s (limite do SLO: 0.500s)."
+          runbook_url: "https://github.com/Gabriel-V-Mendes/Observabilidade/blob/main/docs/runbooks/high-latency.md"
+
+  # ----------------------------------------------------------------------------
+  # 4. Alertas de Infraestrutura do Host (Node Exporter)
+  # ----------------------------------------------------------------------------
+  - name: host_infrastructure_alerts
+    interval: 10s
+    rules:
+      - alert: HighHostCPU
+        expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[2m])) * 100) > 85
+        for: 2m
+        labels:
+          severity: warning
+          category: infrastructure
+        annotations:
+          summary: "CPU do Host acima de 85% ({{ $labels.instance }})"
+          description: "O uso médio de CPU do servidor está em {{ $value | printf \"%.1f\" }}% nos últimos 2 minutos."
+          runbook_url: "https://github.com/Gabriel-V-Mendes/Observabilidade/blob/main/docs/runbooks/host-resources.md"
+
+      - alert: HighDiskUsage
+        expr: |
+          (
+            node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay"}
+            - node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay"}
+          )
+          / node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay"} * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+          category: infrastructure
+        annotations:
+          summary: "Disco do Host acima de 80% ({{ $labels.instance }})"
+          description: "O volume raiz (/) está com {{ $value | printf \"%.1f\" }}% de ocupação."
+          runbook_url: "https://github.com/Gabriel-V-Mendes/Observabilidade/blob/main/docs/runbooks/host-resources.md"

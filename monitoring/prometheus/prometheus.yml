@@ -1,29 +1,56 @@
+# ==============================================================================
+# Prometheus — Coleta de Métricas (RED + Node Exporter) e Avaliação de SLOs
+# ==============================================================================
 global:
-  scrape_interval: 15s  # De quanto em quanto tempo o Prometheus puxa métricas dos targets
+  scrape_interval: 5s      # Coleta a cada 5s para detecção rápida de incidentes (TTD baixo)
+  evaluation_interval: 5s  # Avalia recording rules e alertas a cada 5s
+  external_labels:
+    environment: "lab-sre"
+    project: "observability-slo"
 
-# Arquivo com as regras matemáticas que definem "o que é um problema"
+# Carrega Recording Rules de SLI/SLO e Regras de Alerta
 rule_files:
+  - /etc/prometheus/recording_rules.yml
   - /etc/prometheus/alerts.yml
 
-# Quando uma regra dispara, o alerta é enviado pra cá
+# Despacha alertas ativos para o Alertmanager
 alerting:
   alertmanagers:
     - static_configs:
-        - targets: ['alertmanager:9093']
+        - targets: ["alertmanager:9093"]
 
-# Lista de alvos que o Prometheus vai "raspar" as métricas
 scrape_configs:
-  # Monitora a si mesmo (útil pra saber se o próprio Prometheus tá saudável)
-  - job_name: 'prometheus'
+  # 1. API FastAPI instrumentada (Métricas RED: Rate, Errors, Duration)
+  - job_name: "fastapi-app"
+    metrics_path: /metrics
     static_configs:
-      - targets: ['localhost:9090']
+      - targets: ["app:8000"]
+        labels:
+          service: "observability-api"
 
-  # Puxa as métricas da nossa API FastAPI via /metrics
-  - job_name: 'fastapi-app'
+  # 2. Node Exporter — telemetria de infraestrutura do host (CPU, RAM, Disco, Rede)
+  - job_name: "node-exporter"
     static_configs:
-      - targets: ['app:8000']  # "app" é o nome do serviço no docker-compose
+      - targets: ["node-exporter:9100"]
+        labels:
+          service: "host-node"
 
-  # Puxa métricas do host (CPU, RAM, disco) via Node Exporter
-  - job_name: 'node-exporter'
+  # 3. Auto-monitoramento do próprio Prometheus
+  - job_name: "prometheus"
     static_configs:
-      - targets: ['node-exporter:9100']
+      - targets: ["localhost:9090"]
+
+  # 4. Monitoramento do coletor de logs Grafana Alloy
+  - job_name: "grafana-alloy"
+    static_configs:
+      - targets: ["alloy:12345"]
+
+  # 5. Monitoramento do Grafana Loki
+  - job_name: "loki"
+    static_configs:
+      - targets: ["loki:3100"]
+
+  # 6. Monitoramento do Alertmanager
+  - job_name: "alertmanager"
+    static_configs:
+      - targets: ["alertmanager:9093"]

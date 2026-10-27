@@ -1,12 +1,14 @@
+# ==============================================================================
+# Grafana Dashboard Provider — Carrega automaticamente os JSONs versionados no Git
+# ==============================================================================
 apiVersion: 1
 providers:
-  # Carrega dashboards automaticamente de uma pasta no disco.
-  # Qualquer JSON que a gente jogar nessa pasta vira dashboard no Grafana — zero clique.
-  - name: 'Default Dashboards'
+  - name: "SRE Dashboards"
     orgId: 1
-    folder: ''
+    folder: "SRE & SLOs"
     type: file
     disableDeletion: false
-    updateIntervalSeconds: 10  # Verifica mudanças a cada 10s (ótimo pra dev)
+    updateIntervalSeconds: 10
+    allowUiUpdates: false
     options:
-      path: /etc/grafana/provisioning/dashboards
+      path: /etc/grafana/provisioning/dashboards-json

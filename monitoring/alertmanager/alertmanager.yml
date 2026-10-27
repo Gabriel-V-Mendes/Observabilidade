@@ -1,23 +1,81 @@
+# ==============================================================================
+# Alertmanager — Roteamento, Agrupamento, Inibição e Notificações (Slack/Discord/Email)
+#
+# Por segurança (Zero Segredos no Git), nenhuma chave real de Slack/Discord/SMTP
+# é versionada neste arquivo. Por padrão, os alertas são entregues no receptor
+# webhook local da plataforma (`http://app:8000/webhook/alerts`) e os blocos de
+# Slack, Discord e E-mail estão prontos para ativação via variáveis/secrets.
+# ==============================================================================
 global:
-  resolve_timeout: 5m  # Tempo que espera antes de considerar um alerta "resolvido"
+  resolve_timeout: 3m
 
 route:
-  receiver: 'slack-notifications'  # Todo alerta cai aqui por padrão
-  group_by: ['alertname']          # Agrupa pelo nome — evita 50 mensagens iguais no Slack
-  group_wait: 10s       # Espera 10s juntando alertas antes de mandar a primeira msg
-  group_interval: 1m    # Depois da primeira, manda atualizações a cada 1 min
-  repeat_interval: 1h   # Se continuar falhando, lembra o time a cada 1 hora
+  receiver: "sre-MultiChannel"
+  group_by: ["alertname", "severity", "category"]
+  group_wait: 5s
+  group_interval: 15s
+  repeat_interval: 1h
+  routes:
+    # Alertas críticos (TargetDown, SLOErrorBudgetBurnFast, HighLatencyP99) têm despacho imediato
+    - matchers:
+        - severity = "critical"
+      receiver: "sre-MultiChannel"
+      group_wait: 2s
+      repeat_interval: 30m
+
+    # Alertas de warning têm agrupamento mais suave para evitar fadiga de alertas
+    - matchers:
+        - severity = "warning"
+      receiver: "sre-MultiChannel"
+      group_wait: 10s
+      repeat_interval: 2h
+
+# Regra de Inibição: se o componente inteiro caiu (TargetDown), silencia alertas derivados
+# de queima lenta ou warning para que o plantonista foque na causa primária.
+inhibit_rules:
+  - source_matchers:
+      - alertname = "TargetDown"
+    target_matchers:
+      - severity = "warning"
+    equal: ["environment"]
+
+  - source_matchers:
+      - alertname = "SLOErrorBudgetBurnFast"
+    target_matchers:
+      - alertname = "SLOErrorBudgetBurnSlow"
+    equal: ["slo"]
 
 receivers:
-  - name: 'slack-notifications'
-    slack_configs:
-      # Coloque aqui o Webhook real do Slack — esse é um placeholder
-      - api_url: 'https://exemplo.com/slack-webhook-falso'
-        channel: '#alertas-producao'
-        send_resolved: true  # Manda msg verde quando o problema resolver também
-        title: '[{{ .Status | toUpper }}] {{ .GroupLabels.alertname }}'
-        text: >-
-          {{ range .Alerts }}
-            *Descrição:* {{ .Annotations.description }}
-            *Severidade:* {{ .Labels.severity }}
-          {{ end }}
+  - name: "sre-MultiChannel"
+    # 1. Webhook ativo por padrão no laboratório (permite auditar alertas em GET /webhook/alerts)
+    webhook_configs:
+      - url: "http://app:8000/webhook/alerts"
+        send_resolved: true
+
+    # 2. Exemplo de integração com Slack (descomente e injete o webhook fora do Git):
+    # slack_configs:
+    #   - api_url: "https://hooks.slack.com/services/T00000000/B00000000/SUBSTITUIR_FORA_DO_GIT"
+    #     channel: "#sre-alerts"
+    #     send_resolved: true
+    #     title: "[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }} ({{ .CommonLabels.severity }})"
+    #     text: >-
+    #       {{ range .Alerts }}
+    #       *Resumo:* {{ .Annotations.summary }}
+    #       *Detalhe:* {{ .Annotations.description }}
+    #       *Runbook:* {{ .Annotations.runbook_url }}
+    #       {{ end }}
+
+    # 3. Exemplo de integração nativa com Discord (Alertmanager v0.26+):
+    # discord_configs:
+    #   - webhook_url: "https://discord.com/api/webhooks/0000000000/SUBSTITUIR_FORA_DO_GIT"
+    #     send_resolved: true
+    #     title: "[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}"
+    #     message: >-
+    #       {{ range .Alerts }}**{{ .Annotations.summary }}** — Runbook: {{ .Annotations.runbook_url }}{{ end }}
+
+    # 4. Exemplo de integração por E-mail (SMTP):
+    # email_configs:
+    #   - to: "oncall-sre@exemplo.local"
+    #     from: "alertmanager@exemplo.local"
+    #     smarthost: "smtp.exemplo.local:587"
+    #     send_resolved: true
