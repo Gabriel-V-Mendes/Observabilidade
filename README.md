@@ -220,6 +220,9 @@ make incident   # Simula incidente e cronometra TTD (Time to Detect) e TTR (Time
 make secrets    # Gitleaks em todo o histórico Git (0 vazamentos)
 ```
 
+* **Evidência do CI (GitHub Actions):**
+  [Run #40609511664 no GitHub Actions](https://github.com/Gabriel-V-Mendes/Observabilidade/actions/runs/40609511664) (todos os jobs `security-and-policy`, `lint-and-validate` e `e2e-observability` aprovados).
+
 ---
 
 ## 8. Decisões e Trade-offs
