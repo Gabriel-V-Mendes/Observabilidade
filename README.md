@@ -154,6 +154,16 @@ Para validar que todos os 7 serviços, métricas RED, logs no Loki via Alloy, da
 make smoke
 ```
 
+### Evidências Visuais da Stack em Execução (Grafana, Prometheus, Alloy e FastAPI)
+
+![Grafana Dashboard — Observabilidade, SLOs, Error Budget, Métricas RED, Host e Logs JSON do Alloy/Loki](docs/screenshots/grafana-slo-dashboard.png)
+
+![Prometheus Alert Rules — 8 regras de alerta com runbook_url validado](docs/screenshots/prometheus-alerts.png)
+
+![Grafana Alloy UI — Todos os 5 componentes River Healthy coletando logs para o Loki](docs/screenshots/alloy-pipeline.png)
+
+![Swagger UI da FastAPI Instrumentada (RED + Chaos + Webhook de Alertas)](docs/screenshots/fastapi-observability-swagger.png)
+
 ---
 
 ## 5. Definição de SLIs, SLOs, Error Budget e Regras de Alerta
@@ -258,3 +268,16 @@ Valores de referência em **outubro/2026** (sem impostos):
 3. **Multi-Window Multi-Burn-Rate Completo (1h/5m e 6h/30m):** reduzimos as janelas para `1m` e `5m` para permitir demonstração e medição prática de incidentes em segundos durante o `make incident`. Em produção real com tráfego 24/7, utilizaria os pares canônicos do livro *Google SRE Workbook* (`1h + 5m` para `14.4x` e `6h + 30m` para `6x`) para evitar páginas por picos de menos de 2 minutos.
 4. **Autenticação OAuth2 / OIDC no Grafana e TLS reverso:** substituir a credencial local (`admin`/`admin`) por SSO corporativo (GitHub/Google OAuth) e expor apenas o Grafana via proxy TLS.
 5. **Testes Contínuos de Sintéticos (Blackbox Exporter):** adicionar o `prometheus/blackbox_exporter` testando a API de fora para dentro (HTTP/TLS/DNS) para medir disponibilidade na perspectiva externa mesmo quando a API inteira trava.
+
+---
+
+## 11. Série Completa do Portfólio DevOps & SRE (5 Projetos Conectados)
+
+| # | Projeto | Repositório Oficial | CI Status |
+|:---:|---|---|---|
+| **1** | **Containerização & Pipeline CI/CD (DevSecOps)** | [`Gabriel-V-Mendes/Containeriza-oPipelineCICD`](https://github.com/Gabriel-V-Mendes/Containeriza-oPipelineCICD) | [![CI/CD](https://github.com/Gabriel-V-Mendes/Containeriza-oPipelineCICD/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Gabriel-V-Mendes/Containeriza-oPipelineCICD/actions/workflows/ci.yml) |
+| **2** | **Infraestrutura AWS com OpenTofu & Floci (FinOps + OIDC)** | [`Gabriel-V-Mendes/infraestrutura-aws-terraform-localstack`](https://github.com/Gabriel-V-Mendes/infraestrutura-aws-terraform-localstack) | [![Infra CI/CD](https://github.com/Gabriel-V-Mendes/infraestrutura-aws-terraform-localstack/actions/workflows/infra-ci.yml/badge.svg?branch=main)](https://github.com/Gabriel-V-Mendes/infraestrutura-aws-terraform-localstack/actions/workflows/infra-ci.yml) |
+| **3** | **GitOps & Kubernetes (ArgoCD + Helm + Gateway API + SOPS/ESO)** | [`Gabriel-V-Mendes/GitOps_Kubernets`](https://github.com/Gabriel-V-Mendes/GitOps_Kubernets) | [![Validate Manifests & Security](https://github.com/Gabriel-V-Mendes/GitOps_Kubernets/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Gabriel-V-Mendes/GitOps_Kubernets/actions/workflows/ci.yml) |
+| **4** | **Observabilidade & SRE (Prometheus + Grafana Alloy + Loki + Alertmanager)** *(este repo)* | [`Gabriel-V-Mendes/Observabilidade`](https://github.com/Gabriel-V-Mendes/Observabilidade) | [![Observability & SLO CI](https://github.com/Gabriel-V-Mendes/Observabilidade/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Gabriel-V-Mendes/Observabilidade/actions/workflows/ci.yml) |
+| **5** | **Platform Engineering & Golden Path (IDP + Reusable Workflows + TF Modules)** | [`Gabriel-V-Mendes/platform-engineering`](https://github.com/Gabriel-V-Mendes/platform-engineering) | [![Platform CI](https://github.com/Gabriel-V-Mendes/platform-engineering/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Gabriel-V-Mendes/platform-engineering/actions/workflows/ci.yml) |
+
