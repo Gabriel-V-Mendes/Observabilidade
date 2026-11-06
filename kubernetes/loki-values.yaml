@@ -1,11 +1,15 @@
 # ==============================================================================
 # Grafana Loki — Helm Values para o Novo Repositório Oficial (Março/2026+)
 #
-# ATENÇÃO (Mudança de Repositório em 16/03/2026):
+# ATENÇÃO (Mudança Oficial de Repositório do Helm Chart):
 #   O chart open-source do Loki saiu do repositório legado `grafana/loki`
-#   (congelado na v6.55.0, mantido apenas para o Grafana Enterprise Logs) e
-#   migrou oficialmente para o repositório `grafana-community/helm-charts`
+#   (mantido para o Grafana Enterprise Logs) e
+#   migrou oficialmente para `grafana-community/helm-charts`
 #   (distribuído via HTTPS e OCI no GHCR).
+#   Fontes oficiais:
+#     - https://grafana.com/docs/loki/latest/setup/upgrade/upgrade-to-community/
+#     - https://grafana.com/docs/loki/latest/setup/install/helm/
+#     - https://github.com/grafana/loki/blob/main/production/helm/loki/README.md
 #
 # Instalação via OCI (Recomendado em 2026):
 #   helm upgrade --install loki oci://ghcr.io/grafana-community/helm-charts/loki \
@@ -57,6 +61,8 @@ singleBinary:
 # Desabilita componentes de modo distribuído (SimpleScalable/Distributed) em lab/single-node
 backend:
   replicas: 0
+  persistence:
+    enabled: false
 read:
   replicas: 0
 write:

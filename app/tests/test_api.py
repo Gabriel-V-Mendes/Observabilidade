@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from src.main import CHAOS_STATE, RECEIVED_ALERTS, app
+from src.main import CHAOS_STATE, app, normalize_endpoint
 
 client = TestClient(app)
 
@@ -14,7 +14,6 @@ def setup_function() -> None:
     CHAOS_STATE["error_rate"] = 0.0
     CHAOS_STATE["extra_latency_ms"] = 0
     CHAOS_STATE["ready"] = True
-    RECEIVED_ALERTS.clear()
 
 
 def test_health_and_readiness() -> None:
@@ -60,6 +59,8 @@ def test_unknown_path_normalization_prevents_cardinality_explosion() -> None:
     resp = client.get("/rota-inexistente-987654")
     assert resp.status_code == 404
 
+    assert normalize_endpoint("/items/42") == "/items/{id}"
+
     metrics_text = client.get("/metrics").text
     assert "/rota-inexistente-987654" not in metrics_text
     assert 'endpoint="/unknown"' in metrics_text
@@ -72,30 +73,12 @@ def test_chaos_mode_injection_and_readiness_degradation() -> None:
     )
     assert resp_chaos.status_code == 200
 
+    state = client.get("/chaos").json()
+    assert state["error_rate"] == 1.0
+    assert state["ready"] is False
+
     resp_ready = client.get("/health/ready")
     assert resp_ready.status_code == 503
 
     resp_items = client.get("/items")
     assert resp_items.status_code == 500
-
-
-def test_alertmanager_webhook_receiver() -> None:
-    payload = {
-        "alerts": [
-            {
-                "status": "firing",
-                "labels": {"alertname": "SLOErrorBudgetBurnFast", "severity": "critical"},
-                "annotations": {
-                    "summary": "Queima rápida do Error Budget",
-                    "runbook_url": "https://github.com/Gabriel-V-Mendes/Observabilidade/blob/main/docs/runbooks/error-budget-burn.md",
-                },
-            }
-        ]
-    }
-    resp = client.post("/webhook/alerts", json=payload)
-    assert resp.status_code == 200
-    assert resp.json()["count"] == 1
-
-    listed = client.get("/webhook/alerts").json()
-    assert listed["count"] == 1
-    assert listed["alerts"][0]["alertname"] == "SLOErrorBudgetBurnFast"

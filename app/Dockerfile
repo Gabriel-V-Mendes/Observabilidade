@@ -1,6 +1,6 @@
 # ==============================================================================
 # Dockerfile Multi-Stage — FastAPI Instrumentada (RED Metrics + JSON Logs)
-# Hardening de produção: imagem slim, sem pip no runtime, non-root (UID 10001) e HEALTHCHECK
+# Hardening de produção: imagem slim atualizada, sem pip no runtime, non-root (UID 10001) e HEALTHCHECK
 # ==============================================================================
 FROM python:3.12-slim-bookworm AS builder
 
@@ -26,8 +26,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/opt/venv/bin:$PATH"
 
-# Cria usuário e grupo de sistema com UID/GID fixo (10001) sem shell de login
-RUN groupadd --system --gid 10001 appgroup \
+# Aplica patches de segurança do SO e cria usuário/grupo sem privilégios (UID 10001)
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system --gid 10001 appgroup \
     && useradd --system --uid 10001 --gid appgroup --no-create-home --shell /usr/sbin/nologin appuser
 
 COPY --from=builder /opt/venv /opt/venv

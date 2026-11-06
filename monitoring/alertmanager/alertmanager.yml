@@ -1,19 +1,19 @@
 # ==============================================================================
-# Alertmanager — Roteamento, Agrupamento, Inibição e Notificações (Slack/Discord/Email)
+# Alertmanager — Roteamento, Agrupamento, Inibição e Notificações
 #
-# Por segurança (Zero Segredos no Git), nenhuma chave real de Slack/Discord/SMTP
-# é versionada neste arquivo. Por padrão, os alertas são entregues no receptor
-# webhook local da plataforma (`http://app:8000/webhook/alerts`) e os blocos de
-# Slack, Discord e E-mail estão prontos para ativação via variáveis/secrets.
+# O receptor webhook roda em um contêiner separado (`http://webhook-receiver:8080/webhook/alerts`),
+# fora da API monitorada (`fastapi-app`). Assim, mesmo quando `fastapi-app` sofre
+# queda total (`TargetDown`), o Alertmanager entrega a notificação normalmente e
+# o Tempo de Detecção (TTD) é medido até a notificação efetivamente entregue.
 # ==============================================================================
 global:
   resolve_timeout: 3m
 
 route:
   receiver: "sre-MultiChannel"
-  group_by: ["alertname", "severity", "category"]
+  group_by: ["alertname", "severity", "category", "job"]
   group_wait: 5s
-  group_interval: 15s
+  group_interval: 10s
   repeat_interval: 1h
   routes:
     # Alertas críticos (TargetDown, SLOErrorBudgetBurnFast, HighLatencyP99) têm despacho imediato
@@ -21,6 +21,7 @@ route:
         - severity = "critical"
       receiver: "sre-MultiChannel"
       group_wait: 2s
+      group_interval: 5s
       repeat_interval: 30m
 
     # Alertas de warning têm agrupamento mais suave para evitar fadiga de alertas
@@ -28,10 +29,11 @@ route:
         - severity = "warning"
       receiver: "sre-MultiChannel"
       group_wait: 10s
+      group_interval: 15s
       repeat_interval: 2h
 
 # Regra de Inibição: se o componente inteiro caiu (TargetDown), silencia alertas derivados
-# de queima lenta ou warning para que o plantonista foque na causa primária.
+# de queima lenta ou warning para que a equipe foque na causa primária.
 inhibit_rules:
   - source_matchers:
       - alertname = "TargetDown"
@@ -47,9 +49,9 @@ inhibit_rules:
 
 receivers:
   - name: "sre-MultiChannel"
-    # 1. Webhook ativo por padrão no laboratório (permite auditar alertas em GET /webhook/alerts)
+    # 1. Receptor de Webhook dedicado em contêiner separado (fora da API monitorada)
     webhook_configs:
-      - url: "http://app:8000/webhook/alerts"
+      - url: "http://webhook-receiver:8081/webhook/alerts"
         send_resolved: true
 
     # 2. Exemplo de integração com Slack (descomente e injete o webhook fora do Git):

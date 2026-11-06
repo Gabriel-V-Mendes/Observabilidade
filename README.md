@@ -12,19 +12,20 @@ A primeira versão deste repositório (`commit 0064d1f`) demonstrava o básico d
 
 | Sintoma na versão antiga (`0064d1f`) | Consequência prática | Como foi resolvido |
 |---|---|---|
-| Usava **Promtail** (`grafana/promtail:latest`) lendo `/var/lib/docker/containers` | O Promtail foi **depreciado no Loki 3.7 e descontinuado** em favor do coletor unificado **Grafana Alloy** | Substituído por **Grafana Alloy (`v1.7.1`)** com pipeline declarativo River ([`monitoring/alloy/config.alloy`](monitoring/alloy/config.alloy)) descobrindo containers via Docker socket e extraindo campos JSON |
-| Sem documentação/manifests da mudança do chart do Loki em 2026 | Em **16/03/2026**, o chart OSS do Loki saiu de `grafana/loki` (congelado na `v6.55.0` para uso exclusivo do *Grafana Enterprise Logs*) | Criado [`kubernetes/`](kubernetes/) documentando e configurando o novo repositório oficial **`grafana-community/loki`** (`oci://ghcr.io/grafana-community/helm-charts/loki`) + `grafana/alloy` |
-| Todas as imagens usavam tag `:latest` e não tinham `healthcheck` nem limites de recursos | Builds não reprodutíveis e impossibilidade de usar `docker compose up --wait` | Imagens fixadas por versão (`v3.2.1`, `v1.9.0`, `v0.28.0`, `3.4.2`, `v1.7.1`, `11.5.2`), limites de CPU/RAM e healthchecks em todos os serviços |
+| Usava **Promtail** (`grafana/promtail:latest`) lendo `/var/lib/docker/containers` | O Promtail foi **depreciado pela Grafana Labs em favor do coletor unificado Grafana Alloy** ([fonte oficial: Grafana Docs](https://grafana.com/docs/loki/latest/send-data/promtail/)) | Substituído por **Grafana Alloy** com pipeline declarativo River ([`monitoring/alloy/config.alloy`](monitoring/alloy/config.alloy)) descobrindo containers via Docker socket e extraindo campos JSON |
+| Sem documentação/manifests da mudança do chart do Loki | O chart OSS do Loki migrou do repositório legado `grafana/loki` para o repositório oficial da comunidade **`grafana-community/helm-charts`** ([fonte oficial: Grafana Upgrade Docs](https://grafana.com/docs/loki/latest/setup/upgrade/upgrade-to-community/)) | Criado [`kubernetes/`](kubernetes/) documentando e configurando o repositório oficial **`grafana-community/loki`** (`oci://ghcr.io/grafana-community/helm-charts/loki`) + `grafana/alloy` |
+| Todas as imagens usavam tag `:latest` e não tinham `healthcheck` nem limites de recursos | Builds não reprodutíveis e impossibilidade de usar `docker compose up --wait` | Imagens fixadas por versão, limites de CPU/RAM, Dependabot cobrindo o Compose e healthchecks em todos os serviços |
 | Métricas sem contador explícito de erros, buckets padrão e vulnerável a explosão de cardinalidade | Rotas `404` aleatórias criavam milhares de séries no Prometheus; faltava alerta de **Latência p95** e de **Queima de Error Budget (Burn Rate)** | Instrumentação **RED** completa em [`app/src/main.py`](app/src/main.py) com normalização de rotas, buckets alinhados aos SLOs (`0.3s` e `0.5s`) e **Recording Rules** de Burn Rate (`14.4x` e `2.0x`) |
-| Alertas sem Runbook (`runbook_url`) e sem Post-Mortem | *"Alerta sem ação é ruído"*: o plantonista recebia a notificação sem procedimento padronizado de diagnóstico e mitigação | Todas as **8 regras de alerta** possuem `runbook_url` validado no CI apontando para [`docs/runbooks/`](docs/runbooks/), além do Post-Mortem [`INC-001`](docs/post-mortem/INC-001-api-outage-burn-rate.md) |
-| Zero testes automatizados e zero pipeline de CI | Alterações quebravam regras PromQL ou a API silenciosamente | Suíte `pytest` (`95.8%` de cobertura), validação com `promtool` e `amtool`, scan `gitleaks` e pipeline E2E em [`.github/workflows/ci.yml`](.github/workflows/ci.yml) |
+| Alertas entregues na própria API monitorada e sem Runbook | *"Alerta sem ação é ruído"*, e se a API sofria queda total, o webhook caía junto | Receptor desacoplado em contêiner dedicado ([`webhook-receiver`](webhook-receiver/)), 8 regras de alerta com `runbook_url` validado no CI e relatório consolidado de Game Day ([`INC-001`](docs/post-mortem/INC-001-api-outage-burn-rate.md)) |
+| Zero testes automatizados e zero pipeline de CI | Alterações quebravam regras PromQL ou a API silenciosamente | Suíte `pytest` (>95% de cobertura na API e no Webhook Receiver), validação com `promtool` e `amtool`, scan `gitleaks` e pipeline E2E em [`.github/workflows/ci.yml`](.github/workflows/ci.yml) |
 
 **Critérios de pronto atendidos:**
-- [x] **Promtail trocado por Grafana Alloy** e instalação atualizada do **Loki (2026)** documentada em [`kubernetes/README.md`](kubernetes/README.md).
+- [x] **Promtail trocado por Grafana Alloy** com fontes oficiais e instalação do **Loki** documentada em [`kubernetes/README.md`](kubernetes/README.md).
+- [x] **Receptor de Webhooks desacoplado** em contêiner independente ([`webhook-receiver`](webhook-receiver/)), garantindo medição do TTD de notificação entregue mesmo em queda total da API.
 - [x] **API instrumentada (RED: Taxa, Erros, Duração)** + **Prometheus** + **Node Exporter** + **Dashboards versionados no Git**.
 - [x] **SLOs e Error Budget definidos** com alertas de **Burn Rate (Fast/Slow)**, **Taxa de Erro**, **Latência p95 (< 300ms)**, **Latência p99 (< 500ms)** e **Queda de Componente (`TargetDown`)**.
-- [x] **Componente derrubado de propósito (`make incident`)** com medição automatizada do **Tempo de Detecção (TTD)** e **Tempo de Recuperação (TTR)**.
-- [x] **Post-mortem escrito** ([`docs/post-mortem/INC-001-api-outage-burn-rate.md`](docs/post-mortem/INC-001-api-outage-burn-rate.md)) e **Runbook para cada alerta** ([`docs/runbooks/`](docs/runbooks/)).
+- [x] **Exercício de Game Day executado (`make gameday`)** com medição cronometrada em execução única de **TTD** (notificação entregue) e **TTR**.
+- [x] **Relatório de Game Day consolidado** ([`docs/post-mortem/INC-001-api-outage-burn-rate.md`](docs/post-mortem/INC-001-api-outage-burn-rate.md)) e **Runbook para cada alerta** ([`docs/runbooks/`](docs/runbooks/)).
 
 ---
 
@@ -140,15 +141,16 @@ O flag `--wait` aguarda todos os containers passarem nos healthchecks antes de l
 
 | Serviço | URL Local | Credenciais / Finalidade |
 |---|---|---|
-| **FastAPI App (`/docs` e `/metrics`)** | http://localhost:8000/docs | API instrumentada (RED + Chaos + Webhook de alertas) |
+| **FastAPI App (`/docs` e `/metrics`)** | http://localhost:8000/docs | API monitorada (Métricas RED + Injeção de Falhas) |
+| **Webhook Receiver (`/health` e `/webhook/alerts`)** | http://localhost:8081/webhook/alerts | Receptor dedicado de notificações em contêiner desacoplado |
 | **Grafana (Dashboard SLO & Logs)** | http://localhost:3000 | `admin` / `admin` (Dashboard provisionado na pasta *SRE & SLOs*) |
 | **Prometheus (Targets, Rules & Alerts)** | http://localhost:9090/alerts | Inspeção de SLIs, Recording Rules e estado dos alertas |
 | **Grafana Alloy UI (Pipeline de Logs)** | http://localhost:12345 | Visualização ao vivo dos componentes River (`discovery.docker` → `loki.write`) |
-| **Alertmanager** | http://localhost:9093 | Agrupamento, silêncio e roteamento de alertas |
+| **Alertmanager** | http://localhost:9093 | Agrupamento, inibição e despacho de notificações para o `webhook-receiver` |
 | **Loki Readiness** | http://localhost:3100/ready | API de ingestão e consulta LogQL |
 | **Node Exporter** | http://localhost:9100/metrics | Métricas de CPU, memória, disco e rede do host |
 
-Para validar que todos os 7 serviços, métricas RED, logs no Loki via Alloy, dashboard no Grafana e runbooks estão funcionando:
+Para validar que todos os 8 serviços, métricas RED, logs no Loki via Alloy, receptor de webhooks, dashboard no Grafana e runbooks estão funcionando:
 
 ```bash
 make smoke
@@ -193,30 +195,42 @@ Todas as regras estão declaradas em [`monitoring/prometheus/alerts.yml`](monito
 | **`HighHostCPU`** | Uso médio de CPU do host `> 85%` | `2m` | `warning` | [`docs/runbooks/host-resources.md`](docs/runbooks/host-resources.md) |
 | **`HighDiskUsage`** | Ocupação da partição `/` `> 80%` | `5m` | `warning` | [`docs/runbooks/host-resources.md`](docs/runbooks/host-resources.md) |
 
+### 5.3 Janelas de Avaliação de Burn Rate: Laboratório vs Produção Real
+
+Conforme detalhado na [Especificação Formal de SLOs](docs/slo-specification.md#3-janelas-de-avaliação-de-burn-rate-tempos-de-laboratório-vs-produção-real):
+- **Janelas utilizadas neste Laboratório (`1m` e `5m`):** São tempos de laboratório calibrados para permitir que o pipeline de CI (`.github/workflows/ci.yml`) e o exercício automatizado de **Game Day** (`make gameday`) provoquem a queima de orçamento, ativem as regras no Prometheus e entreguem a notificação no `webhook-receiver` com medição de **TTD real em menos de 40 segundos**.
+- **Janelas que seriam utilizadas em Produção Real (Multi-Window, Multi-Burn-Rate do Google SRE):** Em ambientes produtivos contínuos, janelas de 1 minuto causariam alertas ruidosos (falsos positivos) diante de oscilações transitórias de rede. A arquitetura de produção recomendada pelo *Google SRE Workbook* combina janelas longa e curta com validação mútua:
+  - **Fast Burn (Alerta Crítico / Page):** Janela Longa de **`1 hora`** e Janela Curta de **`5 minutos`** com fator de queima **`14.4x`** (consome 2% do orçamento mensal de 30 dias em 1 hora).
+  - **Medium Burn (Alerta Urgente / Page):** Janela Longa de **`6 horas`** e Janela Curta de **`30 minutos`** com fator de queima **`6.0x`** (consome 5% do orçamento mensal em 6 horas).
+  - **Slow Burn (Alerta Não Urgente / Ticket):** Janela Longa de **`1 a 3 dias`** (24h–72h) e Janela Curta de **`2 a 6 horas`** com fator de queima **`1.0x` a `3.0x`** (consome 10% do orçamento mensal em poucos dias).
+
 ---
 
-## 6. Incidente Provocado, Medição de TTD/TTR e Post-Mortem
+## 6. Exercício de Game Day, Medição de TTD/TTR e Relatório Consolidado
 
-Para provocar o incidente automatizado (Fase 1: queima rápida de Error Budget + Fase 2: queda proposital do container `fastapi-app` com medição em segundos do tempo até detecção e recuperação):
+Para executar o exercício de **Game Day** automatizado (Fase 1: queima rápida de Error Budget via injeção contínua de falhas + Fase 2: queda proposital do container `fastapi-app` com entrega de notificação no contêiner dedicado `webhook-receiver` + Fase 3: recuperação do serviço com medição cronometrada de TTR):
 
 ```bash
-make incident     # ou: ./scripts/simulate-incident.sh
+make gameday     # ou: ./scripts/simulate-incident.sh (alias: make incident)
 ```
 
-Saída real da execução cronometrada na stack:
+Saída real de execução única cronometrada na stack:
 
 ```text
 ==================================================================
-RESUMO DAS MÉTRICAS DO INCIDENTE PROVOCADO
+RESUMO DAS MÉTRICAS DO EXERCÍCIO DE GAME DAY (EXECUÇÃO ÚNICA)
 ==================================================================
-  • TTD Queima de Budget (SLOErrorBudgetBurnFast -> firing): 32s
-  • TTD Queda do Componente (up == 0 -> pending):            9s
-  • TTD Queda do Componente (TargetDown -> firing):          19s
-  • TTR Recuperação após restart (up == 1):                  8s
+  • Pico de Burn Rate (1m) medido na Fase 1:                       175.2x
+  • Queima de Budget (SLOErrorBudgetBurnFast -> firing Prometheus): 32s
+  • TTD Queima de Budget (notificação entregue no webhook-receiver): 33s
+  • Queda do Componente (up == 0 -> pending no Prometheus):        11s
+  • Queda do Componente (TargetDown -> firing no Prometheus):      22s
+  • TTD Queda do Componente (notificação entregue no webhook):     23s
+  • TTR Recuperação após restart (up == 1 no Prometheus):          7s
 ==================================================================
 ```
 
-- **Relatório completo de Post-Mortem:** [`docs/post-mortem/INC-001-api-outage-burn-rate.md`](docs/post-mortem/INC-001-api-outage-burn-rate.md)
+- **Relatório completo de Game Day / Post-Mortem:** [`docs/post-mortem/INC-001-api-outage-burn-rate.md`](docs/post-mortem/INC-001-api-outage-burn-rate.md)
 
 ---
 
@@ -239,12 +253,12 @@ make secrets    # Gitleaks em todo o histórico Git (0 vazamentos)
 
 | Decisão | Alternativa avaliada | Por quê / Trade-off |
 |---|---|---|
-| **Grafana Alloy (`v1.7.1`)** no lugar do Promtail | Promtail, Fluent Bit, Vector | O Promtail foi descontinuado no Loki 3.7. O Alloy unifica coleta de logs, métricas e traces (OpenTelemetry) com UI de depuração (`:12345`) e pipeline declarativo River |
-| **Loki (`v3.4.2`) com TSDB Schema v13** | Elasticsearch / OpenSearch | O Loki indexa apenas labels de baixa cardinalidade (`container`, `service_name`, `level`, `endpoint`) e comprime o corpo do log em chunks, consumindo ~10x menos RAM que o Elasticsearch |
+| **Grafana Alloy no lugar do Promtail** | Promtail, Fluent Bit, Vector | O Promtail foi oficialmente depreciado pela Grafana Labs em favor do **Grafana Alloy** ([fonte oficial: Grafana Docs](https://grafana.com/docs/loki/latest/send-data/promtail/)). O Alloy unifica coleta de logs, métricas e traces (OpenTelemetry) com UI de depuração (`:12345`) e pipeline declarativo River |
+| **Loki com TSDB Schema v13** | Elasticsearch / OpenSearch | O Loki indexa apenas labels de baixa cardinalidade (`container`, `service_name`, `level`, `endpoint`) e comprime o corpo do log em chunks, consumindo ~10x menos RAM que o Elasticsearch |
+| **Receptor de Webhooks Desacoplado (`webhook-receiver`)** | Endpoint `/webhook/alerts` dentro da API monitorada | Se a API monitorada cair (`TargetDown`), o receptor cairia junto e o alerta não seria entregue. Com o contêiner dedicado (`webhook-receiver:8081`), o Alertmanager entrega a notificação e o TTD medido reflete uma entrega real |
 | **Alertas baseados em Burn Rate do Error Budget** (`14.4x` e `2.0x`) | Apenas limiar fixo de erro instantâneo | Alertar pela velocidade de consumo do orçamento (`0.5%`) evita falsos positivos em micro-oscilações e avisa imediatamente quando um incidente coloca a meta mensal (`99.5%`) em risco |
-| **`scrape_interval: 5s` e `evaluation_interval: 5s`** | `15s` ou `30s` | Reduz o Tempo de Detecção (TTD) de quedas para **~15 segundos** no laboratório. Em clusters com milhares de targets, `15s` consome menos CPU/disco no TSDB |
+| **Janelas de Burn Rate de 1m e 5m no Lab** | Janelas de produção de 1h/5m e 24h/2h | Janelas curtas de 1m/5m com `scrape_interval: 5s` permitem testar cenários de queima e queda de componente no CI e em Game Days medindo TTD em menos de 40 segundos. Em produção 24x7, aplicam-se janelas Multi-Window (1h/5m para 14.4x) |
 | **Normalização de `endpoint` no middleware da API** | Usar `request.url.path` bruto como label | Impede ataque/acidente de explosão de cardinalidade no Prometheus quando clientes requisitam URLs dinâmicas inexistentes (`/item/12345` vira `/items/{id}` ou `/unknown`) |
-| **Receptor Webhook local ativo + Slack/Discord/Email parametrizados** | Hardcodar URL de Webhook no YAML | Mantém `amtool check-config` válido e permite testar o recebimento de alertas no CI (`GET /webhook/alerts`) sem jamais versionar tokens de Slack/Discord no Git |
 
 ---
 
@@ -254,7 +268,7 @@ Valores de referência em **outubro/2026** (sem impostos):
 
 | Cenário | Infraestrutura | Custo Mensal Estimado | Observação |
 |---|---|---|---|
-| **1. Execução Local (`docker compose`)** | 7 containers locais com limites somados de ~1,8 GB de RAM (uso real em repouso: ~420 MB) | **US$ 0,00 / mês** | Custo zero para desenvolvimento, estudo e validação de incidentes |
+| **1. Execução Local (`docker compose`)** | 8 containers locais (FastAPI App, Webhook Receiver, Prometheus, Node Exporter, Loki, Alloy, Alertmanager, Grafana) com limites de recursos | **US$ 0,00 / mês** | Custo zero para desenvolvimento, estudo e validação de incidentes/Game Days |
 | **2. CI/CD (GitHub Actions em repo público)** | Jobs `security-and-policy`, `lint-and-validate` e `e2e-observability` | **US$ 0,00 / mês** | Runners Ubuntu gratuitos para repositórios públicos |
 | **3. VPS Dedicada de Monitoramento (Hetzner CX23 / 4 GB RAM)** | 2 vCPU, 4 GB RAM, 40 GB NVMe rodando toda a stack Docker Compose com retenção de 7–15 dias | **≈ € 5,99 / mês (~US$ 6,50)** | Suficiente para monitorar dezenas de serviços pequenos sem custo por GB ingerido |
 | **4. Grafana Cloud (Free Tier vs Pro)** | Até 10k séries Prometheus + 50 GB de logs Loki + 3 usuários | **US$ 0,00 / mês** (Free Tier) | Acima da franquia: ~US$ 0,50/GB de logs ingeridos e ~US$ 8 por 1k séries ativas |
@@ -265,7 +279,7 @@ Valores de referência em **outubro/2026** (sem impostos):
 
 1. **Rastreamento Distribuído (Distributed Tracing) com Grafana Tempo + OpenTelemetry SDK:** hoje correlacionamos métricas (Prometheus) e logs estruturados (Loki) via `request_id`. Como o **Grafana Alloy** já é nativamente compatível com OTLP (`otelcol.receiver.otlp`), o próximo passo natural seria instrumentar a FastAPI com `opentelemetry-instrumentation-fastapi` enviando spans para o **Grafana Tempo**, habilitando *Exemplars* (clicar num ponto de latência p99 no gráfico e abrir o trace exato).
 2. **Armazenamento de Objetos (S3 / MinIO) para Loki e Thanos/Mimir no Prometheus:** no Compose local usamos volumes de disco com retenção de 7 dias. Em produção, apontaria o Loki e o Prometheus (via Thanos ou Grafana Mimir) para buckets S3 com política de lifecycle para retenção de longo prazo (90–365 dias) a baixo custo.
-3. **Multi-Window Multi-Burn-Rate Completo (1h/5m e 6h/30m):** reduzimos as janelas para `1m` e `5m` para permitir demonstração e medição prática de incidentes em segundos durante o `make incident`. Em produção real com tráfego 24/7, utilizaria os pares canônicos do livro *Google SRE Workbook* (`1h + 5m` para `14.4x` e `6h + 30m` para `6x`) para evitar páginas por picos de menos de 2 minutos.
+3. **Multi-Window Multi-Burn-Rate Completo (1h/5m e 6h/30m):** reduzimos as janelas para `1m` e `5m` para permitir demonstração e medição prática de confiabilidade em segundos durante o `make gameday`. Em produção real com tráfego 24/7, utilizaria os pares canônicos do livro *Google SRE Workbook* (`1h + 5m` para `14.4x` e `6h + 30m` para `6x`) para evitar notificações por picos de menos de 2 minutos.
 4. **Autenticação OAuth2 / OIDC no Grafana e TLS reverso:** substituir a credencial local (`admin`/`admin`) por SSO corporativo (GitHub/Google OAuth) e expor apenas o Grafana via proxy TLS.
 5. **Testes Contínuos de Sintéticos (Blackbox Exporter):** adicionar o `prometheus/blackbox_exporter` testando a API de fora para dentro (HTTP/TLS/DNS) para medir disponibilidade na perspectiva externa mesmo quando a API inteira trava.
 

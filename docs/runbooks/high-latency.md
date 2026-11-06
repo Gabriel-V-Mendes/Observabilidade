@@ -3,7 +3,7 @@
 - **Alertas cobertos:**
   - `HighLatencyP95` (`warning`): `job:sli_latency_p95:seconds1m > 0.300` (`> 300ms`)
   - `HighLatencyP99` (`critical`): `job:sli_latency_p99:seconds1m > 0.500` (`> 500ms`)
-- **Impacto:** As respostas estão lentas, degradando a experiência dos usuários e aumentando o risco de esgotamento do pool de workers (`app_requests_in_progress`).
+- **Impacto no SLO:** As respostas ultrapassam os limiares acordados (`p95 < 300ms` e `p99 < 500ms`), elevando o risco de esgotamento do pool de workers (`app_requests_in_progress`).
 
 ---
 

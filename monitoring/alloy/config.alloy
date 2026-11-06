@@ -1,14 +1,16 @@
 // =============================================================================
 // Grafana Alloy — Pipeline de Coleta de Logs para o Loki (Substituto do Promtail)
 //
-// O Promtail foi descontinuado no Loki 3.7 em favor do Grafana Alloy (coletor
-// unificado baseado em OpenTelemetry + sintaxe declarativa River).
+// O Promtail entrou em depreciação (LTS) no Loki 3.4 (13/02/2025) e atingiu
+// End-of-Life (EOL) em 02/03/2026 em favor do Grafana Alloy:
+//   - https://grafana.com/docs/loki/latest/send-data/promtail/
+//   - https://grafana.com/docs/loki/latest/setup/migrate/migrate-to-alloy/
 //
 // Fluxo deste pipeline:
 //   1. discovery.docker     -> descobre todos os containers ativos via Docker socket
 //   2. discovery.relabel    -> extrai labels limpos (container, service_name, stream)
 //   3. loki.source.docker   -> lê o stream de logs dos containers em tempo real
-//   4. loki.process         -> faz parse dos logs JSON da FastAPI (level, status_code, path)
+//   4. loki.process         -> faz parse dos logs JSON da FastAPI e do webhook-receiver
 //   5. loki.write           -> envia em lote (push) para a API do Loki (:3100)
 // =============================================================================
 
@@ -34,7 +36,7 @@ discovery.relabel "containers" {
     target_label  = "container"
   }
 
-  // Extrai o nome do serviço do Docker Compose (ex.: "app", "prometheus", "loki")
+  // Extrai o nome do serviço do Docker Compose (ex.: "app", "webhook-receiver", "prometheus")
   rule {
     source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
     target_label  = "service_name"
@@ -61,10 +63,10 @@ loki.source.docker "containers" {
   forward_to    = [loki.process.parse_json.receiver]
 }
 
-// 4. Processa logs JSON estruturados emitidos pela FastAPI sem quebrar logs texto dos demais containers
+// 4. Processa logs JSON estruturados emitidos pela FastAPI e pelo receptor de webhooks
 loki.process "parse_json" {
   stage.match {
-    selector = "{container=\"fastapi-app\"}"
+    selector = "{container=~\"fastapi-app|webhook-receiver\"}"
 
     stage.json {
       expressions = {
@@ -74,6 +76,8 @@ loki.process "parse_json" {
         status_code = "status_code",
         duration_ms = "duration_ms",
         request_id  = "request_id",
+        alertname   = "alertname",
+        status      = "status",
       }
     }
 

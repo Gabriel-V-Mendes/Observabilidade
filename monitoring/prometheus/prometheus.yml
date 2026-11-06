@@ -1,8 +1,8 @@
 # ==============================================================================
-# Prometheus — Coleta de Métricas (RED + Node Exporter) e Avaliação de SLOs
+# Prometheus — Coleta de Métricas (RED + Node Exporter + Stack) e Avaliação de SLOs
 # ==============================================================================
 global:
-  scrape_interval: 5s      # Coleta a cada 5s para detecção rápida de incidentes (TTD baixo)
+  scrape_interval: 5s      # Coleta a cada 5s para detecção rápida no laboratório (Game Day)
   evaluation_interval: 5s  # Avalia recording rules e alertas a cada 5s
   external_labels:
     environment: "lab-sre"
@@ -28,29 +28,37 @@ scrape_configs:
         labels:
           service: "observability-api"
 
-  # 2. Node Exporter — telemetria de infraestrutura do host (CPU, RAM, Disco, Rede)
+  # 2. Receptor externo de Webhooks do Alertmanager (contêiner separado da API)
+  - job_name: "webhook-receiver"
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["webhook-receiver:8081"]
+        labels:
+          service: "alert-webhook-receiver"
+
+  # 3. Node Exporter — telemetria de infraestrutura do host (CPU, RAM, Disco, Rede)
   - job_name: "node-exporter"
     static_configs:
       - targets: ["node-exporter:9100"]
         labels:
           service: "host-node"
 
-  # 3. Auto-monitoramento do próprio Prometheus
+  # 4. Auto-monitoramento do próprio Prometheus
   - job_name: "prometheus"
     static_configs:
       - targets: ["localhost:9090"]
 
-  # 4. Monitoramento do coletor de logs Grafana Alloy
+  # 5. Monitoramento do coletor de logs Grafana Alloy
   - job_name: "grafana-alloy"
     static_configs:
       - targets: ["alloy:12345"]
 
-  # 5. Monitoramento do Grafana Loki
+  # 6. Monitoramento do Grafana Loki
   - job_name: "loki"
     static_configs:
       - targets: ["loki:3100"]
 
-  # 6. Monitoramento do Alertmanager
+  # 7. Monitoramento do Alertmanager
   - job_name: "alertmanager"
     static_configs:
       - targets: ["alertmanager:9093"]

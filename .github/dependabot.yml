@@ -1,0 +1,61 @@
+# ==============================================================================
+# Dependabot — Atualização automatizada de imagens do Docker Compose,
+# Dockerfiles, pacotes Python (pip) e GitHub Actions fixadas por SHA.
+# ==============================================================================
+version: 2
+updates:
+  # 1. Imagens do Docker Compose (Prometheus, Loki, Grafana, Alloy, Alertmanager, Node Exporter)
+  - package-ecosystem: "docker-compose"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps(compose)"
+
+  # 2. Imagens base dos Dockerfiles (API monitorada e receptor de webhooks)
+  - package-ecosystem: "docker"
+    directory: "/app"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "deps(docker)"
+
+  - package-ecosystem: "docker"
+    directory: "/webhook-receiver"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "deps(docker)"
+
+  # 3. Dependências Python (FastAPI, Uvicorn, Pydantic, Prometheus Client, Pytest, Ruff)
+  - package-ecosystem: "pip"
+    directory: "/app"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps(pip)"
+
+  - package-ecosystem: "pip"
+    directory: "/webhook-receiver"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps(pip)"
+
+  # 4. GitHub Actions fixadas por commit SHA
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci(deps)"

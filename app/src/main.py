@@ -4,8 +4,10 @@ Projetada para o Projeto 4 (Observabilidade e SLOs):
 - Exposição de métricas Prometheus em `/metrics` com buckets alinhados aos SLOs (p95 < 300ms, p99 < 500ms)
 - Proteção contra explosão de cardinalidade de labels (normalização de rotas)
 - Logs estruturados em JSON na stdout coletados pelo Grafana Alloy e indexados no Loki
-- Endpoints de negócio (`/items`), probes (`/health`, `/health/ready`), injeção de falhas (`/error`, `/slow`, `/chaos`)
-  e receptor local de webhooks do Alertmanager (`/webhook/alerts`) para validação ponta a ponta.
+- Endpoints de negócio (`/items`), probes (`/health`, `/health/ready`) e injeção controlada de
+  falhas (`/error`, `/slow`, `/chaos`) para exercícios de Game Day.
+- O receptor de webhooks do Alertmanager roda em um contêiner separado (`webhook-receiver:8081`),
+  garantindo entrega de notificações mesmo quando esta API está fora do ar (`TargetDown`).
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ import random
 import sys
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -48,7 +50,7 @@ logger.propagate = False
 def log_json(level: str, message: str, **extra: Any) -> None:
     """Emite uma linha JSON estruturada na stdout para ingestão pelo Grafana Alloy."""
     payload = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "level": level.upper(),
         "service": APP_NAME,
         "version": APP_VERSION,
@@ -92,15 +94,8 @@ REQUESTS_IN_PROGRESS = Gauge(
     ["method", "endpoint"],
 )
 
-# 5. Contador de notificações entregues pelo Alertmanager no webhook de auditoria
-ALERT_WEBHOOKS_TOTAL = Counter(
-    "app_alert_webhooks_received_total",
-    "Total de alertas entregues pelo Alertmanager no receptor webhook da API",
-    ["alertname", "status", "severity"],
-)
-
 # ==============================================================================
-# Estado em Memória (Itens + Modo Chaos para Simulação de Incidente e Burn Rate)
+# Estado em Memória (Itens + Modo Chaos para Exercício de Game Day e Burn Rate)
 # ==============================================================================
 KNOWN_ENDPOINTS = {
     "/health",
@@ -109,7 +104,6 @@ KNOWN_ENDPOINTS = {
     "/error",
     "/slow",
     "/chaos",
-    "/webhook/alerts",
 }
 
 ITEMS_DB: list[dict[str, Any]] = [
@@ -122,8 +116,6 @@ CHAOS_STATE: dict[str, Any] = {
     "extra_latency_ms": 0,    # Latência artificial adicional (ms) injetada em /items
     "ready": True,            # Se False, /health/ready retorna 503 (degradação de dependência)
 }
-
-RECEIVED_ALERTS: list[dict[str, Any]] = []
 
 
 class ItemCreate(BaseModel):
@@ -140,7 +132,7 @@ class ChaosConfig(BaseModel):
 app = FastAPI(
     title="Observability & SLO API",
     version=APP_VERSION,
-    description="API instrumentada com métricas RED, logs JSON estruturados e simulação de incidentes.",
+    description="API instrumentada com métricas RED, logs JSON estruturados e endpoints de Game Day.",
 )
 
 
@@ -272,7 +264,7 @@ def create_item(payload: ItemCreate) -> dict[str, Any]:
 
 
 # ==============================================================================
-# Rotas de Simulação de Falha / Latência e Controle de Incidente
+# Rotas de Simulação de Falha / Latência para Exercícios de Game Day
 # ==============================================================================
 @app.get("/slow")
 def trigger_slow(delay_ms: int = 650) -> dict[str, Any]:
@@ -290,7 +282,7 @@ def trigger_error() -> Response:
     return Response(
         status_code=500,
         media_type="application/json",
-        content=json.dumps({"detail": "Internal server error (simulated incident)"}),
+        content=json.dumps({"detail": "Internal server error (simulated game day fault)"}),
     )
 
 
@@ -308,38 +300,3 @@ def update_chaos_state(config: ChaosConfig) -> dict[str, Any]:
     CHAOS_STATE["ready"] = config.ready
     log_json(level="WARN", message="Estado de chaos atualizado", **CHAOS_STATE)
     return {"status": "updated", "chaos": CHAOS_STATE}
-
-
-@app.post("/webhook/alerts")
-async def receive_alertmanager_webhook(request: Request) -> dict[str, Any]:
-    """Receptor local de webhooks do Alertmanager para auditoria e testes automatizados."""
-    body = await request.json()
-    alerts = body.get("alerts", [])
-    for alert in alerts:
-        labels = alert.get("labels", {})
-        status = alert.get("status", "unknown")
-        alertname = labels.get("alertname", "unknown")
-        severity = labels.get("severity", "unknown")
-        ALERT_WEBHOOKS_TOTAL.labels(
-            alertname=alertname,
-            status=status,
-            severity=severity,
-        ).inc()
-        event = {
-            "received_at": datetime.now(timezone.utc).isoformat(),
-            "alertname": alertname,
-            "status": status,
-            "severity": severity,
-            "summary": alert.get("annotations", {}).get("summary", ""),
-            "runbook_url": alert.get("annotations", {}).get("runbook_url", ""),
-        }
-        RECEIVED_ALERTS.append(event)
-        log_json(level="WARN", message=f"Alerta recebido do Alertmanager: {alertname} ({status})", **event)
-
-    return {"status": "received", "count": len(alerts)}
-
-
-@app.get("/webhook/alerts")
-def list_received_alerts() -> dict[str, Any]:
-    """Lista os alertas entregues pelo Alertmanager durante testes e incidentes."""
-    return {"count": len(RECEIVED_ALERTS), "alerts": RECEIVED_ALERTS[-50:]}

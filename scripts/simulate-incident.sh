@@ -1,22 +1,33 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Simulação Automatizada de Incidente & Medição de TTD (Time to Detect) e TTR
+# Exercício de Game Day — Simulação Controlada & Medição de TTD e TTR
 #
-# Executa duas etapas práticas exigidas no Projeto 4:
-#   Etapa 1 -> Queima de Error Budget (`SLOErrorBudgetBurnFast` + `HighErrorRate`)
-#              Sustenta falhas HTTP 500 via modo chaos/rajada e cronometra
-#              quantos segundos o Prometheus/Alertmanager levam para detectar e
-#              notificar o receptor webhook.
-#   Etapa 2 -> Derrubada Proposital de Componente (`docker compose stop app`)
-#              Para o container da API de propósito, mede o tempo exato (em s)
-#              até `up == 0` (Pending) e até o alerta `TargetDown` entrar em
-#              `firing` (TTD), restaura o componente e mede o tempo de
-#              recuperação (TTR).
+# Arquitetura de medição real:
+#   - O receptor de webhooks (`webhook-receiver:8080`) roda em um contêiner
+#     separado da API monitorada (`fastapi-app:8000`).
+#   - O TTD (Time to Detect) só é considerado concluído quando a notificação
+#     do Alertmanager é EFETIVAMENTE ENTREGUE no contêiner `webhook-receiver`.
+#
+# Etapas do Game Day:
+#   Fase 1 -> Queima de Error Budget (`SLOErrorBudgetBurnFast` > 14.4x)
+#             Injeta falhas HTTP 500 via modo chaos e cronometra:
+#               a) Pico de Burn Rate (1m) medido no Prometheus;
+#               b) Transição para `firing` no Prometheus;
+#               c) TTD de entrega real da notificação em `webhook-receiver:8080`.
+#   Fase 2 -> Queda Proposital do Componente (`docker compose stop app`)
+#             Interrompe o contêiner `fastapi-app` e cronometra:
+#               a) Detecção de falha de scrape (`up == 0` -> `pending`);
+#               b) Disparo da regra `TargetDown` (`firing` no Prometheus);
+#               c) TTD de entrega real da notificação `TargetDown` no contêiner
+#                  separado `webhook-receiver:8080` (mesmo com a API fora do ar).
+#   Fase 3 -> Recuperação (`docker compose start app`) e Medição de TTR
+#             Restaura o contêiner da API e cronometra o tempo até `up == 1`.
 # ==============================================================================
 set -euo pipefail
 
 PROM_URL="http://127.0.0.1:9090"
 APP_URL="http://127.0.0.1:8000"
+WEBHOOK_URL="http://127.0.0.1:8081"
 
 query_metric() {
   local expr="$1"
@@ -28,11 +39,11 @@ try:
     data = json.loads(req.read().decode())
     res = data.get('data', {}).get('result', [])
     if res:
-        print(float(res[0]['value'][1]))
+        print(f\"{float(res[0]['value'][1]):.1f}\")
         sys.exit(0)
 except Exception:
     pass
-print('0')
+print('0.0')
 " "$expr"
 }
 
@@ -59,50 +70,88 @@ print('inactive')
 " "$alertname" "$job"
 }
 
+check_webhook_delivered() {
+  local alertname="$1"
+  local status="$2"
+  local job="${3:-}"
+  python3 -c "
+import urllib.request, urllib.parse, json, sys
+params = {'alertname': sys.argv[1], 'status': sys.argv[2]}
+if sys.argv[3]:
+    params['job'] = sys.argv[3]
+try:
+    url = '${WEBHOOK_URL}/webhook/alerts?' + urllib.parse.urlencode(params)
+    req = urllib.request.urlopen(url, timeout=2)
+    data = json.loads(req.read().decode())
+    if data.get('count', 0) > 0:
+        print('delivered')
+        sys.exit(0)
+except Exception:
+    pass
+print('waiting')
+" "$alertname" "$status" "$job"
+}
+
 echo "=================================================================="
-echo "FASE 1 · Simulação de Queima de Error Budget (Burn Rate > 14.4x)"
+echo "PREPARAÇÃO DO GAME DAY · Limpando histórico do webhook-receiver (:8081)"
 echo "=================================================================="
-# Ativa modo chaos com 100% de erro para sustentar queima de orçamento
+curl -fsS -X DELETE "${WEBHOOK_URL}/webhook/alerts" >/dev/null
+echo "✔ Contêiner webhook-receiver pronto e zerado."
+
+echo ""
+echo "=================================================================="
+echo "FASE 1 · Game Day: Queima de Error Budget (Burn Rate > 14.4x)"
+echo "=================================================================="
 curl -fsS -X POST "${APP_URL}/chaos" \
   -H "Content-Type: application/json" \
   -d '{"error_rate": 1.0, "extra_latency_ms": 200, "ready": true}' >/dev/null
 
 BURN_START=$(date +%s)
-BURN_DETECTED_AT=""
+BURN_START_ISO=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+BURN_FIRING_AT=""
+BURN_WEBHOOK_TTD=""
+PEAK_BURN_RATE="0.0"
 
-# Gera tráfego contínuo em background enquanto monitora
 (
-  for _ in $(seq 1 40); do
+  for _ in $(seq 1 60); do
     curl -s -o /dev/null "${APP_URL}/items" || true
-    sleep 0.5
+    sleep 0.4
   done
 ) &
 TRAFFIC_PID=$!
 
-echo "[T=0s] Injetando falhas 5xx contínuas para elevar o Burn Rate..."
-for elapsed in $(seq 1 35); do
+echo "[T=0s | ${BURN_START_ISO}] Injetando falhas HTTP 500 contínuas em /items..."
+for _ in $(seq 1 45); do
   BURN_RATE="$(query_metric 'job:slo_error_burn_rate:ratio_rate1m')"
+  PEAK_BURN_RATE="$(python3 -c "import sys; print(f'{max(float(sys.argv[1]), float(sys.argv[2])):.1f}')" "$PEAK_BURN_RATE" "$BURN_RATE")"
   STATE_BURN="$(get_alert_state 'SLOErrorBudgetBurnFast')"
-  echo "  [+${elapsed}s] Burn Rate (1m)=${BURN_RATE}x | Alerta SLOErrorBudgetBurnFast=${STATE_BURN}"
+  WH_BURN="$(check_webhook_delivered 'SLOErrorBudgetBurnFast' 'firing')"
 
-  if [ "$STATE_BURN" = "firing" ]; then
-    NOW_TS=$(date +%s)
-    BURN_DETECTED_AT=$((NOW_TS - BURN_START))
-    echo "✅ Alerta SLOErrorBudgetBurnFast entrou em FIRING em TTD = ${BURN_DETECTED_AT}s!"
+  NOW_TS=$(date +%s)
+  DELTA=$((NOW_TS - BURN_START))
+  echo "  [+${DELTA}s] Burn Rate (1m)=${BURN_RATE}x (pico=${PEAK_BURN_RATE}x) | Prometheus=${STATE_BURN} | Webhook=${WH_BURN}"
+
+  if [ "$STATE_BURN" = "firing" ] && [ -z "$BURN_FIRING_AT" ]; then
+    BURN_FIRING_AT="$DELTA"
+    echo "  ⚡ SLOErrorBudgetBurnFast entrou em FIRING no Prometheus em +${BURN_FIRING_AT}s"
+  fi
+
+  if [ "$WH_BURN" = "delivered" ]; then
+    BURN_WEBHOOK_TTD="$DELTA"
+    echo "  ✅ Notificação SLOErrorBudgetBurnFast ENTREGUE no webhook-receiver em TTD = ${BURN_WEBHOOK_TTD}s!"
     break
   fi
   sleep 1
 done
 
 kill "$TRAFFIC_PID" >/dev/null 2>&1 || true
-# Restaura modo normal
 curl -fsS -X POST "${APP_URL}/chaos" \
   -H "Content-Type: application/json" \
   -d '{"error_rate": 0.0, "extra_latency_ms": 0, "ready": true}' >/dev/null
 
 echo ""
 echo "=================================================================="
-echo "FASE 2 · Derrubando Componente de Propósito (docker compose stop app)"
+echo "FASE 2 · Game Day: Queda Proposital do Componente (docker compose stop app)"
 echo "=================================================================="
 OUTAGE_START=$(date +%s)
 OUTAGE_ISO=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -111,23 +160,30 @@ docker compose stop app >/dev/null
 
 PENDING_SECONDS=""
 FIRING_SECONDS=""
+OUTAGE_WEBHOOK_TTD=""
 
-for elapsed in $(seq 1 35); do
+for _ in $(seq 1 45); do
   UP_VAL="$(query_metric 'up{job="fastapi-app"}')"
   TARGET_STATE="$(get_alert_state 'TargetDown' 'fastapi-app')"
+  WH_TARGET="$(check_webhook_delivered 'TargetDown' 'firing' 'fastapi-app')"
 
   NOW_TS=$(date +%s)
   DELTA=$((NOW_TS - OUTAGE_START))
-  echo "  [+${DELTA}s] up(fastapi-app)=${UP_VAL} | TargetDown state=${TARGET_STATE}"
+  echo "  [+${DELTA}s] up(fastapi-app)=${UP_VAL} | Prometheus=${TARGET_STATE} | Webhook=${WH_TARGET}"
 
   if [ "$TARGET_STATE" = "pending" ] && [ -z "$PENDING_SECONDS" ]; then
     PENDING_SECONDS="$DELTA"
-    echo "  ⚡ Scrape falhou (up == 0) detectado pelo Prometheus em +${PENDING_SECONDS}s (Pending)!"
+    echo "  ⚡ Scrape falhou (up == 0 -> pending) detectado pelo Prometheus em +${PENDING_SECONDS}s!"
   fi
 
-  if [ "$TARGET_STATE" = "firing" ]; then
+  if [ "$TARGET_STATE" = "firing" ] && [ -z "$FIRING_SECONDS" ]; then
     FIRING_SECONDS="$DELTA"
-    echo "  🚨 INCIDENTE DETECTADO (TargetDown = FIRING) em TTD = ${FIRING_SECONDS}s!"
+    echo "  🚨 TargetDown entrou em FIRING no Prometheus em +${FIRING_SECONDS}s!"
+  fi
+
+  if [ "$WH_TARGET" = "delivered" ]; then
+    OUTAGE_WEBHOOK_TTD="$DELTA"
+    echo "  ✅ Notificação TargetDown ENTREGUE no contêiner separado webhook-receiver em TTD = ${OUTAGE_WEBHOOK_TTD}s!"
     break
   fi
   sleep 1
@@ -135,33 +191,43 @@ done
 
 echo ""
 echo "=================================================================="
-echo "FASE 3 · Recuperando o Componente (docker compose start app) e Medindo TTR"
+echo "FASE 3 · Game Day: Recuperação (docker compose start app) e Medição de TTR"
 echo "=================================================================="
 RECOVERY_START=$(date +%s)
-echo "[T=0s] Executando: docker compose start app"
+RECOVERY_ISO=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+echo "[T=0s | ${RECOVERY_ISO}] Executando: docker compose start app"
 docker compose start app >/dev/null
 
 TTR_SECONDS=""
-for elapsed in $(seq 1 30); do
+for _ in $(seq 1 35); do
   UP_VAL="$(query_metric 'up{job="fastapi-app"}')"
   TARGET_STATE="$(get_alert_state 'TargetDown' 'fastapi-app')"
-  echo "  [+${elapsed}s] up(fastapi-app)=${UP_VAL} | TargetDown state=${TARGET_STATE}"
+  NOW_TS=$(date +%s)
+  DELTA=$((NOW_TS - RECOVERY_START))
+  echo "  [+${DELTA}s] up(fastapi-app)=${UP_VAL} | TargetDown state=${TARGET_STATE}"
 
   if [ "$UP_VAL" = "1.0" ] || [ "$UP_VAL" = "1" ]; then
-    NOW_TS=$(date +%s)
-    TTR_SECONDS=$((NOW_TS - RECOVERY_START))
-    echo "✅ Componente recuperado e reportando up == 1 em TTR = ${TTR_SECONDS}s!"
+    TTR_SECONDS="$DELTA"
+    echo "  ✅ Componente recuperado e reportando up == 1 em TTR = ${TTR_SECONDS}s!"
     break
   fi
   sleep 1
 done
 
+if [ -z "$BURN_WEBHOOK_TTD" ] || [ -z "$OUTAGE_WEBHOOK_TTD" ] || [ -z "$TTR_SECONDS" ]; then
+  echo "❌ Erro: alguma etapa do Game Day não completou dentro do tempo limite!" >&2
+  exit 1
+fi
+
 echo ""
 echo "=================================================================="
-echo "RESUMO DAS MÉTRICAS DO INCIDENTE PROVOCADO"
+echo "RESUMO DAS MÉTRICAS DO EXERCÍCIO DE GAME DAY (EXECUÇÃO ÚNICA)"
 echo "=================================================================="
-echo "  • TTD Queima de Budget (SLOErrorBudgetBurnFast -> firing): ${BURN_DETECTED_AT:-N/A}s"
-echo "  • TTD Queda do Componente (up == 0 -> pending):            ${PENDING_SECONDS:-N/A}s"
-echo "  • TTD Queda do Componente (TargetDown -> firing):          ${FIRING_SECONDS:-N/A}s"
-echo "  • TTR Recuperação após restart (up == 1):                  ${TTR_SECONDS:-N/A}s"
+echo "  • Pico de Burn Rate (1m) medido na Fase 1:                       ${PEAK_BURN_RATE}x"
+echo "  • Queima de Budget (SLOErrorBudgetBurnFast -> firing Prometheus): ${BURN_FIRING_AT:-N/A}s"
+echo "  • TTD Queima de Budget (notificação entregue no webhook-receiver): ${BURN_WEBHOOK_TTD}s"
+echo "  • Queda do Componente (up == 0 -> pending no Prometheus):        ${PENDING_SECONDS:-N/A}s"
+echo "  • Queda do Componente (TargetDown -> firing no Prometheus):      ${FIRING_SECONDS:-N/A}s"
+echo "  • TTD Queda do Componente (notificação entregue no webhook):     ${OUTAGE_WEBHOOK_TTD}s"
+echo "  • TTR Recuperação após restart (up == 1 no Prometheus):          ${TTR_SECONDS}s"
 echo "=================================================================="

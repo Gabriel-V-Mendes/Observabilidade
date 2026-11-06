@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Smoke Test Completo da Stack de Observabilidade & SLOs
-# Valida: API (RED metrics), Prometheus, Node Exporter, Loki, Grafana Alloy,
-# Alertmanager, Grafana (Datasources + Dashboard JSON) e Runbooks de cada alerta.
+# Valida: API (RED metrics), Receptor Externo de Webhooks (:8080), Prometheus,
+# Node Exporter, Loki, Grafana Alloy, Alertmanager, Grafana e Runbooks.
 # ==============================================================================
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 echo "=================================================================="
-echo "1/6 · Validando API FastAPI (/health, /health/ready, /items, /metrics)"
+echo "1/7 · Validando API FastAPI Monitorada (:8000 — /health, /items, /metrics)"
 echo "=================================================================="
 HEALTH_OUT="$(curl -fsS http://127.0.0.1:8000/health)"
 grep -q '"status":"ok"' <<< "$HEALTH_OUT"
@@ -17,7 +17,7 @@ grep -q '"status":"ok"' <<< "$HEALTH_OUT"
 READY_OUT="$(curl -fsS http://127.0.0.1:8000/health/ready)"
 grep -q '"status":"ready"' <<< "$READY_OUT"
 
-for i in $(seq 1 8); do
+for _ in $(seq 1 8); do
   curl -fsS http://127.0.0.1:8000/items >/dev/null
 done
 curl -fsS -X POST http://127.0.0.1:8000/items \
@@ -29,11 +29,25 @@ grep -q "app_requests_total" <<< "$METRICS"
 grep -q "app_errors_total" <<< "$METRICS"
 grep -q "app_request_duration_seconds_bucket" <<< "$METRICS"
 grep -q "app_requests_in_progress" <<< "$METRICS"
-echo "✅ API e métricas RED (Rate, Errors, Duration) operacionais!"
+echo "✅ API monitorada e métricas RED (Rate, Errors, Duration) operacionais!"
 
 echo ""
 echo "=================================================================="
-echo "2/6 · Validando Prometheus, Node Exporter e Recording Rules de SLO"
+echo "2/7 · Validando Receptor Externo de Webhooks (:8081 — contêiner separado)"
+echo "=================================================================="
+WR_HEALTH="$(curl -fsS http://127.0.0.1:8081/health)"
+grep -q '"status":"ok"' <<< "$WR_HEALTH"
+
+WR_ALERTS="$(curl -fsS http://127.0.0.1:8081/webhook/alerts)"
+grep -q '"alerts":' <<< "$WR_ALERTS"
+
+WR_METRICS="$(curl -fsS http://127.0.0.1:8081/metrics)"
+grep -q "webhook_receiver_alerts_received_total" <<< "$WR_METRICS"
+echo "✅ Contêiner webhook-receiver (:8081) isolado da API e pronto para receber notificações!"
+
+echo ""
+echo "=================================================================="
+echo "3/7 · Validando Prometheus (:9090), Node Exporter (:9100) e Recording Rules"
 echo "=================================================================="
 curl -fsS http://127.0.0.1:9090/-/healthy >/dev/null
 NE_OUT="$(curl -fsS http://127.0.0.1:9100/metrics)"
@@ -41,17 +55,17 @@ grep -q "node_cpu_seconds_total" <<< "$NE_OUT"
 
 sleep 6
 TARGETS_JSON="$(curl -fsS http://127.0.0.1:9090/api/v1/targets)"
-for job in "fastapi-app" "node-exporter" "prometheus" "grafana-alloy" "loki" "alertmanager"; do
+for job in "fastapi-app" "webhook-receiver" "node-exporter" "prometheus" "grafana-alloy" "loki" "alertmanager"; do
   grep -q "\"job\":\"${job}\"" <<< "$TARGETS_JSON"
 done
 
 SLI_AVAIL="$(curl -fsS 'http://127.0.0.1:9090/api/v1/query?query=job:sli_availability:percent1m')"
 grep -q '"status":"success"' <<< "$SLI_AVAIL"
-echo "✅ Prometheus raspando todos os 6 targets e calculando Recording Rules de SLO!"
+echo "✅ Prometheus raspando todos os 7 targets e calculando Recording Rules de SLO!"
 
 echo ""
 echo "=================================================================="
-echo "3/6 · Validando Grafana Alloy (:12345) enviando logs JSON ao Loki (:3100)"
+echo "4/7 · Validando Grafana Alloy (:12345) enviando logs JSON ao Loki (:3100)"
 echo "=================================================================="
 curl -fsS http://127.0.0.1:12345/-/ready >/dev/null
 
@@ -88,14 +102,14 @@ echo "✅ Grafana Alloy coletando logs Docker e indexando no Loki com sucesso!"
 
 echo ""
 echo "=================================================================="
-echo "4/6 · Validando Alertmanager (:9093)"
+echo "5/7 · Validando Alertmanager (:9093)"
 echo "=================================================================="
 curl -fsS http://127.0.0.1:9093/-/healthy >/dev/null
-echo "✅ Alertmanager saudável!"
+echo "✅ Alertmanager saudável e roteando para http://webhook-receiver:8081/webhook/alerts!"
 
 echo ""
 echo "=================================================================="
-echo "5/6 · Validando Grafana (:3000) — Datasources e Dashboard como Código"
+echo "6/7 · Validando Grafana (:3000) — Datasources e Dashboard como Código"
 echo "=================================================================="
 GRAFANA_HEALTH="$(curl -fsS http://127.0.0.1:3000/api/health)"
 grep -q '"database": "ok"' <<< "$GRAFANA_HEALTH"
@@ -106,7 +120,7 @@ echo "✅ Grafana com Datasources (Prometheus + Loki) e Dashboard SLO provisiona
 
 echo ""
 echo "=================================================================="
-echo "6/6 · Validando Política SRE: Todo Alerta Possui Runbook Existente"
+echo "7/7 · Validando Política SRE: Todo Alerta Possui Runbook Existente"
 echo "=================================================================="
 ALERT_COUNT=$(grep -cE '^[[:space:]]*- alert:' "$ROOT_DIR/monitoring/prometheus/alerts.yml")
 RUNBOOK_COUNT=$(grep -c 'runbook_url:' "$ROOT_DIR/monitoring/prometheus/alerts.yml")

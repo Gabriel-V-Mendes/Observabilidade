@@ -1,15 +1,18 @@
 # ==============================================================================
-# Docker Compose — Stack Completa de Observabilidade & SLOs
+# Docker Compose — Stack Completa de Observabilidade, SLOs e Game Day (2026)
 #
 # Mudanças em relação à versão legada:
-#   1. Saiu o Promtail (descontinuado) -> Entrou o Grafana Alloy (`grafana/alloy:v1.7.1`)
-#   2. Todas as imagens têm versão fixada (zero `:latest`)
-#   3. Todos os serviços possuem healthchecks/limites de recursos, permitindo subir
-#      e validar toda a plataforma com um único comando:
+#   1. Saiu o Promtail (depreciado oficialmente pela Grafana Labs) -> Entrou o
+#      Grafana Alloy (`grafana/alloy`) com pipeline declarativo River
+#   2. Receptor de Webhooks do Alertmanager (`webhook-receiver`) movido para um
+#      contêiner separado da API monitorada (`fastapi-app`), garantindo entrega
+#      real de notificações mesmo quando a API está caída (`TargetDown`)
+#   3. Imagens atualizadas e monitoradas via Dependabot (.github/dependabot.yml)
+#   4. Todos os serviços possuem healthchecks e limites de recursos:
 #        docker compose up -d --build --wait
 # ==============================================================================
 services:
-  # 1. API FastAPI instrumentada (Métricas RED + Logs Estruturados JSON)
+  # 1. API FastAPI monitorada (Métricas RED + Logs Estruturados JSON)
   app:
     build:
       context: ./app
@@ -37,9 +40,37 @@ services:
     networks:
       - observability_net
 
-  # 2. Prometheus — Coleta de métricas, Recording Rules de SLI/SLO e motor de alertas
+  # 2. Receptor Externo de Webhooks do Alertmanager (contêiner desacoplado da API monitorada)
+  webhook-receiver:
+    build:
+      context: ./webhook-receiver
+      dockerfile: Dockerfile
+    container_name: webhook-receiver
+    ports:
+      - "127.0.0.1:8081:8081"
+    environment:
+      - SERVICE_NAME=alert-webhook-receiver
+      - SERVICE_VERSION=2.0.0
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+    restart: unless-stopped
+    networks:
+      - observability_net
+
+  # 3. Prometheus — Coleta de métricas, Recording Rules de SLI/SLO e motor de alertas
   prometheus:
-    image: prom/prometheus:v3.2.1
+    image: prom/prometheus:v3.16.0
     container_name: prometheus
     ports:
       - "127.0.0.1:9090:9090"
@@ -67,9 +98,9 @@ services:
     networks:
       - observability_net
 
-  # 3. Node Exporter — Métricas de hardware e SO do host (CPU, RAM, Disco, Rede)
+  # 4. Node Exporter — Métricas de hardware e SO do host (CPU, RAM, Disco, Rede)
   node-exporter:
-    image: prom/node-exporter:v1.9.0
+    image: prom/node-exporter:v1.12.1
     container_name: node-exporter
     ports:
       - "127.0.0.1:9100:9100"
@@ -91,9 +122,9 @@ services:
     networks:
       - observability_net
 
-  # 4. Alertmanager — Deduplicação, agrupamento, inibição e roteamento (Webhook/Slack/Discord/Email)
+  # 5. Alertmanager — Deduplicação, agrupamento, inibição e roteamento para o webhook-receiver externo
   alertmanager:
-    image: prom/alertmanager:v0.28.0
+    image: prom/alertmanager:v0.34.2
     container_name: alertmanager
     ports:
       - "127.0.0.1:9093:9093"
@@ -107,6 +138,9 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    depends_on:
+      webhook-receiver:
+        condition: service_healthy
     deploy:
       resources:
         limits:
@@ -116,9 +150,9 @@ services:
     networks:
       - observability_net
 
-  # 5. Grafana Loki — Agregador de logs indexado por labels (Schema v13 TSDB)
+  # 6. Grafana Loki — Agregador de logs indexado por labels (Schema v13 TSDB)
   loki:
-    image: grafana/loki:3.4.2
+    image: grafana/loki:3.7.9
     container_name: loki
     ports:
       - "127.0.0.1:3100:3100"
@@ -135,9 +169,9 @@ services:
     networks:
       - observability_net
 
-  # 6. Grafana Alloy — Coletor moderno de telemetria (substitui o Promtail descontinuado)
+  # 7. Grafana Alloy — Coletor moderno de telemetria (substitui o Promtail EOL em 02/03/2026)
   alloy:
-    image: grafana/alloy:v1.7.1
+    image: grafana/alloy:v1.21.3
     container_name: alloy
     user: root
     ports:
@@ -162,9 +196,9 @@ services:
     networks:
       - observability_net
 
-  # 7. Grafana — Visualização com Datasources e Dashboards provisionados via código (IaC)
+  # 8. Grafana — Visualização com Datasources e Dashboards provisionados via código (IaC)
   grafana:
-    image: grafana/grafana:11.5.2
+    image: grafana/grafana:13.3.0
     container_name: grafana
     ports:
       - "127.0.0.1:3000:3000"

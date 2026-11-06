@@ -3,7 +3,7 @@
 - **Alertas cobertos:** `TargetDown`
 - **Severidade:** `critical`
 - **Expressão PromQL:** `up{job=~"fastapi-app|node-exporter|loki|grafana-alloy"} == 0` (por `10s`)
-- **Impacto no Usuário / SLO:** Quando `job="fastapi-app"` cai, 100% das requisições falham na borda e o serviço deixa de reportar métricas; agentes de coleta (`grafana-alloy`, `loki`, `node-exporter`) caídos deixam o ambiente cego.
+- **Impacto no Serviço / SLO:** Quando `job="fastapi-app"` cai, 100% das requisições falham na borda e o serviço deixa de reportar métricas; agentes de coleta (`grafana-alloy`, `loki`, `node-exporter`, `webhook-receiver`) caídos comprometem a telemetria.
 
 ---
 
@@ -56,4 +56,4 @@ curl -fsS http://127.0.0.1:8000/health
 ```bash
 curl -fsS "http://127.0.0.1:9090/api/v1/query?query=up"
 ```
-3. Verificar que o alerta `TargetDown` mudou para `resolved` no Alertmanager (`http://127.0.0.1:9093`).
+3. Verificar que o alerta `TargetDown` mudou para `resolved` no Alertmanager (`http://127.0.0.1:9093`) e foi entregue no receptor externo (`curl -fsS http://127.0.0.1:8081/webhook/alerts`).
