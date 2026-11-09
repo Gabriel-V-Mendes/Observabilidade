@@ -3,7 +3,7 @@
 # Isolado da API monitorada para garantir recebimento de alertas mesmo quando
 # o container `fastapi-app` está fora do ar (`TargetDown`).
 # ==============================================================================
-FROM python:3.12-slim-bookworm AS builder
+FROM python:3.15-slim-bookworm AS builder
 
 WORKDIR /build
 
@@ -19,7 +19,7 @@ RUN python -m venv /opt/venv \
 # ------------------------------------------------------------------------------
 # Runtime Stage
 # ------------------------------------------------------------------------------
-FROM python:3.12-slim-bookworm AS runtime
+FROM python:3.15-slim-bookworm AS runtime
 
 WORKDIR /app
 
