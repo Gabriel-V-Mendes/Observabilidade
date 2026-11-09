@@ -2,7 +2,7 @@
 # Dockerfile Multi-Stage — FastAPI Instrumentada (RED Metrics + JSON Logs)
 # Hardening de produção: imagem slim atualizada, sem pip no runtime, non-root (UID 10001) e HEALTHCHECK
 # ==============================================================================
-FROM python:3.12-slim-bookworm AS builder
+FROM python:3.15-slim-bookworm AS builder
 
 WORKDIR /build
 
@@ -18,7 +18,7 @@ RUN python -m venv /opt/venv \
 # ------------------------------------------------------------------------------
 # Runtime Stage
 # ------------------------------------------------------------------------------
-FROM python:3.12-slim-bookworm AS runtime
+FROM python:3.15-slim-bookworm AS runtime
 
 WORKDIR /app
 
