@@ -1,8 +1,8 @@
 // =============================================================================
 // Grafana Alloy — Pipeline de Coleta de Logs para o Loki (Substituto do Promtail)
 //
-// O Promtail entrou em depreciação (LTS) no Loki 3.4 (13/02/2025) e atingiu
-// End-of-Life (EOL) em 02/03/2026 em favor do Grafana Alloy:
+// O Promtail foi oficialmente depreciado pela Grafana Labs em favor do
+// coletor unificado Grafana Alloy:
 //   - https://grafana.com/docs/loki/latest/send-data/promtail/
 //   - https://grafana.com/docs/loki/latest/setup/migrate/migrate-to-alloy/
 //

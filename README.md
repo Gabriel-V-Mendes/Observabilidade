@@ -14,17 +14,18 @@ A primeira versão deste repositório (`commit 0064d1f`) demonstrava o básico d
 |---|---|---|
 | Usava **Promtail** (`grafana/promtail:latest`) lendo `/var/lib/docker/containers` | O Promtail foi **depreciado pela Grafana Labs em favor do coletor unificado Grafana Alloy** ([fonte oficial: Grafana Docs](https://grafana.com/docs/loki/latest/send-data/promtail/)) | Substituído por **Grafana Alloy** com pipeline declarativo River ([`monitoring/alloy/config.alloy`](monitoring/alloy/config.alloy)) descobrindo containers via Docker socket e extraindo campos JSON |
 | Sem documentação/manifests da mudança do chart do Loki | O chart OSS do Loki migrou do repositório legado `grafana/loki` para o repositório oficial da comunidade **`grafana-community/helm-charts`** ([fonte oficial: Grafana Upgrade Docs](https://grafana.com/docs/loki/latest/setup/upgrade/upgrade-to-community/)) | Criado [`kubernetes/`](kubernetes/) documentando e configurando o repositório oficial **`grafana-community/loki`** (`oci://ghcr.io/grafana-community/helm-charts/loki`) + `grafana/alloy` |
-| Todas as imagens usavam tag `:latest` e não tinham `healthcheck` nem limites de recursos | Builds não reprodutíveis e impossibilidade de usar `docker compose up --wait` | Imagens fixadas por versão, limites de CPU/RAM, Dependabot cobrindo o Compose e healthchecks em todos os serviços |
+| Todas as imagens usavam tag `:latest` e não tinham `healthcheck` nem limites de recursos | Builds não reprodutíveis e impossibilidade de usar `docker compose up --wait` | Imagens fixadas por versão, limites de CPU/RAM, Dependabot cobrindo 6 ecossistemas/alvos e healthchecks em todos os serviços |
 | Métricas sem contador explícito de erros, buckets padrão e vulnerável a explosão de cardinalidade | Rotas `404` aleatórias criavam milhares de séries no Prometheus; faltava alerta de **Latência p95** e de **Queima de Error Budget (Burn Rate)** | Instrumentação **RED** completa em [`app/src/main.py`](app/src/main.py) com normalização de rotas, buckets alinhados aos SLOs (`0.3s` e `0.5s`) e **Recording Rules** de Burn Rate (`14.4x` e `2.0x`) |
-| Alertas entregues na própria API monitorada e sem Runbook | *"Alerta sem ação é ruído"*, e se a API sofria queda total, o webhook caía junto | Receptor desacoplado em contêiner dedicado ([`webhook-receiver`](webhook-receiver/)), 8 regras de alerta com `runbook_url` validado no CI e relatório consolidado de Game Day ([`INC-001`](docs/post-mortem/INC-001-api-outage-burn-rate.md)) |
+| Alertas entregues na própria API monitorada e sem Runbook | *"Alerta sem ação é ruído"*, e se a API sofria queda total, o webhook caía junto | Receptor desacoplado em contêiner dedicado ([`webhook-receiver:8081`](webhook-receiver/)), 8 regras de alerta com `runbook_url` validado no CI e relatório consolidado de Game Day ([`INC-001`](docs/post-mortem/INC-001-api-outage-burn-rate.md)) |
 | Zero testes automatizados e zero pipeline de CI | Alterações quebravam regras PromQL ou a API silenciosamente | Suíte `pytest` (>95% de cobertura na API e no Webhook Receiver), validação com `promtool` e `amtool`, scan `gitleaks` e pipeline E2E em [`.github/workflows/ci.yml`](.github/workflows/ci.yml) |
 
 **Critérios de pronto atendidos:**
 - [x] **Promtail trocado por Grafana Alloy** com fontes oficiais e instalação do **Loki** documentada em [`kubernetes/README.md`](kubernetes/README.md).
-- [x] **Receptor de Webhooks desacoplado** em contêiner independente ([`webhook-receiver`](webhook-receiver/)), garantindo medição do TTD de notificação entregue mesmo em queda total da API.
+- [x] **Receptor de Webhooks desacoplado** em contêiner independente na porta `:8081` ([`webhook-receiver`](webhook-receiver/)), garantindo medição do TTD de notificação entregue mesmo em queda total da API.
+- [x] **Dependabot ativo cobrindo 6 ecossistemas/alvos** (Compose, Dockerfiles app/webhook-receiver, pip app/webhook-receiver e GitHub Actions).
 - [x] **API instrumentada (RED: Taxa, Erros, Duração)** + **Prometheus** + **Node Exporter** + **Dashboards versionados no Git**.
 - [x] **SLOs e Error Budget definidos** com alertas de **Burn Rate (Fast/Slow)**, **Taxa de Erro**, **Latência p95 (< 300ms)**, **Latência p99 (< 500ms)** e **Queda de Componente (`TargetDown`)**.
-- [x] **Exercício de Game Day executado (`make gameday`)** com medição cronometrada em execução única de **TTD** (notificação entregue) e **TTR**.
+- [x] **Exercício de Game Day consistente (`make gameday`)** com medição cronometrada via `date +%s` de **TTD** (33s para Burn Rate, 23s para queda com notificação entregue) e **TTR** (7s).
 - [x] **Relatório de Game Day consolidado** ([`docs/post-mortem/INC-001-api-outage-burn-rate.md`](docs/post-mortem/INC-001-api-outage-burn-rate.md)) e **Runbook para cada alerta** ([`docs/runbooks/`](docs/runbooks/)).
 
 ---
@@ -38,6 +39,7 @@ flowchart TB
     subgraph Stack["Docker Compose (observability_net) — Sobe com 1 Comando (make up)"]
         direction TB
         API["FastAPI App (UID 10001 non-root)\n• Métricas RED em /metrics\n• Logs JSON estruturados na stdout"]
+        WR["Webhook Receiver (:8081)\n• Receptor isolado de alertas\n• Métricas e auditoria em /webhook/alerts"]
         NE["Node Exporter (:9100)\nCPU, Memória, Disco do Host"]
         Alloy["Grafana Alloy (:12345)\nSubstituto do Promtail (River pipeline)\ndiscovery.docker -> loki.process -> loki.write"]
         Loki[("Grafana Loki 3.4 (:3100)\nEngine TSDB Schema v13")]
@@ -46,10 +48,11 @@ flowchart TB
         Grafana["Grafana 11.5 (:3000)\nProvisioning IaC: Datasources + Dashboard JSON"]
 
         API -. "stdout JSON logs" .-> Alloy
+        WR -. "stdout JSON logs" .-> Alloy
         Alloy -->|"Push API /loki/api/v1/push"| Loki
-        Prom -->|"Scrape 5s /metrics"| API & NE & Alloy & Loki
+        Prom -->|"Scrape 5s /metrics"| API & WR & NE & Alloy & Loki
         Prom -->|"Dispara alertas (com runbook_url)"| AM
-        AM -->|"Notifica + audita"| API
+        AM -->|"Notifica + audita (:8081)"| WR
         Grafana -->|"PromQL"| Prom
         Grafana -->|"LogQL"| Loki
     end
@@ -59,7 +62,9 @@ flowchart TB
 
 ```text
 .
-├── .github/workflows/ci.yml                # Pipeline CI: Gitleaks + Ruff + Pytest + promtool + amtool + E2E
+├── .github/
+│   ├── dependabot.yml                      # Atualização semanal cobrindo 6 ecossistemas/alvos
+│   └── workflows/ci.yml                    # Pipeline CI: Gitleaks + Ruff + Pytest + promtool + amtool + E2E
 ├── Makefile                                # Atalhos: make up, down, test, lint, smoke, incident, secrets
 ├── docker-compose.yml                      # Stack completa com healthchecks, limites de recursos e versões fixas
 ├── .env.example                            # Variáveis de ambiente documentadas (zero segredos no Git)
@@ -67,13 +72,18 @@ flowchart TB
 │   ├── Dockerfile                          # Multi-stage, Python 3.12-slim, sem pip, UID 10001, HEALTHCHECK
 │   ├── requirements.txt                    # Dependências de produção fixadas
 │   ├── requirements-dev.txt                # Pytest, pytest-cov, httpx, ruff
-│   ├── src/main.py                         # FastAPI instrumentada (RED metrics, JSON logs, /chaos, /webhook/alerts)
+│   ├── src/main.py                         # FastAPI instrumentada (RED metrics, JSON logs, /items, /chaos)
 │   └── tests/test_api.py                   # Testes unitários e de instrumentação (>95% cobertura)
+├── webhook-receiver/
+│   ├── Dockerfile                          # Multi-stage, Python 3.12-slim, non-root UID 10002, HEALTHCHECK :8081
+│   ├── requirements.txt                    # Dependências de produção fixadas
+│   ├── src/main.py                         # Receptor dedicado de alertas do Alertmanager (:8081)
+│   └── tests/test_receiver.py              # Testes unitários do receptor de webhooks e métricas (>95%)
 ├── monitoring/
 │   ├── alloy/config.alloy                  # Pipeline Grafana Alloy (substitui o antigo Promtail)
 │   ├── loki/loki-config.yml                # Configuração Loki 3.4+ (TSDB schema v13 + retenção 7d)
 │   ├── prometheus/
-│   │   ├── prometheus.yml                  # Scrape de 5s nos 6 serviços da stack
+│   │   ├── prometheus.yml                  # Scrape de 5s nos 7 alvos da stack
 │   │   ├── recording_rules.yml             # Pré-cálculo de SLIs, Error Budget Restante e Burn Rate (1m/5m)
 │   │   └── alerts.yml                      # 8 alertas (Burn Rate, Erro, p95, p99, TargetDown, Host) com runbook_url
 │   ├── alertmanager/alertmanager.yml       # Roteamento por severidade, inibição e templates Slack/Discord/Email
@@ -91,7 +101,7 @@ flowchart TB
 └── docs/
     ├── slo-specification.md                # Definição formal dos SLIs, SLOs, matemática de Burn Rate e política
     ├── post-mortem/
-    │   └── INC-001-api-outage-burn-rate.md # Post-mortem completo com linha do tempo real, 5 Porquês e ações
+    │   └── INC-001-api-outage-burn-rate.md # Post-mortem do Game Day (TTD 33s e 23s, TTR 7s consistentes)
     └── runbooks/                           # 1 runbook acionável para cada grupo de alerta
         ├── target-down.md
         ├── error-budget-burn.md
@@ -164,7 +174,7 @@ make smoke
 
 ![Grafana Alloy UI — Todos os 5 componentes River Healthy coletando logs para o Loki](docs/screenshots/alloy-pipeline.png)
 
-![Swagger UI da FastAPI Instrumentada (RED + Chaos + Webhook de Alertas)](docs/screenshots/fastapi-observability-swagger.png)
+![Swagger UI da FastAPI Instrumentada (RED + Chaos + Injeção de Falhas)](docs/screenshots/fastapi-observability-swagger.png)
 
 ---
 
@@ -230,6 +240,9 @@ RESUMO DAS MÉTRICAS DO EXERCÍCIO DE GAME DAY (EXECUÇÃO ÚNICA)
 ==================================================================
 ```
 
+O exercício de **Game Day** foi estruturado para garantir paridade e rastreabilidade absoluta entre a instrumentação e a documentação:
+- **Medição precisa com `date +%s`:** O script [`scripts/simulate-incident.sh`](scripts/simulate-incident.sh) calcula os timestamps inteiros na origem (`BURN_START`, `OUTAGE_START`, `RECOVERY_START`), registrando tempos determinísticos.
+- **Consistência ponta a ponta:** O **TTD de 33 s** (Queima de Budget), o **TTD de 23 s** (Queda com notificação entregue em `webhook-receiver:8081`) e o **TTR de 7 s** (Recuperação do container) aparecem idênticos e sincronizados no resumo de terminal, na tabela executiva de impacto e na linha do tempo detalhada.
 - **Relatório completo de Game Day / Post-Mortem:** [`docs/post-mortem/INC-001-api-outage-burn-rate.md`](docs/post-mortem/INC-001-api-outage-burn-rate.md)
 
 ---
@@ -238,11 +251,24 @@ RESUMO DAS MÉTRICAS DO EXERCÍCIO DE GAME DAY (EXECUÇÃO ÚNICA)
 
 ```bash
 make lint       # Ruff (Python) + promtool check config/rules + amtool check-config
-make test       # Pytest + cobertura mínima de 90% (atual: 95.8%)
-make smoke      # Valida API, Prometheus, Alloy->Loki, Alertmanager, Grafana e Runbooks
-make incident   # Simula incidente e cronometra TTD (Time to Detect) e TTR (Time to Recovery)
+make test       # Pytest + cobertura mínima de 90% na API e no Webhook Receiver (atual: >95%)
+make smoke      # Valida API, Webhook Receiver, Prometheus, Alloy->Loki, Alertmanager, Grafana e Runbooks
+make incident   # Simula Game Day e cronometra TTD (notificação entregue) e TTR (alias: make gameday)
 make secrets    # Gitleaks em todo o histórico Git (0 vazamentos)
 ```
+
+### 7.1 Gestão Contínua de Dependências (Dependabot em 6 Ecossistemas)
+
+O arquivo [`.github/dependabot.yml`](.github/dependabot.yml) executa varreduras semanais automatizadas cobrindo **6 ecossistemas/alvos**:
+
+| # | Ecossistema / Alvo | Diretório | Finalidade e Escopo |
+|:---:|---|---|---|
+| **1** | `docker-compose` | `/` | Imagens da stack (`prom/prometheus:v3.16.0`, `grafana/loki:3.4.2`, `grafana/alloy:v1.7.1`, `prom/alertmanager:v0.34.2`, `prom/node-exporter:v1.9.0`, `grafana/grafana:11.5.2`) |
+| **2** | `docker` | `/app` | Imagem base `python:3.12-slim-bookworm` do contêiner da API monitorada |
+| **3** | `docker` | `/webhook-receiver` | Imagem base `python:3.12-slim-bookworm` do contêiner desacoplado do receptor de alertas |
+| **4** | `pip` | `/app` | Dependências Python de produção e desenvolvimento da API (`fastapi`, `uvicorn`, `pydantic`, `prometheus-client`, `pytest`, `ruff`) |
+| **5** | `pip` | `/webhook-receiver` | Dependências Python do receptor de webhooks (`fastapi`, `uvicorn`, `pydantic`, `prometheus-client`, `pytest`) |
+| **6** | `github-actions` | `/` | Actions do pipeline CI fixadas por commit SHA (`actions/checkout`) |
 
 * **Evidência do CI (GitHub Actions):**
   [Run #40609511664 no GitHub Actions](https://github.com/Gabriel-V-Mendes/Observabilidade/actions/runs/40609511664) (todos os jobs `security-and-policy`, `lint-and-validate` e `e2e-observability` aprovados).

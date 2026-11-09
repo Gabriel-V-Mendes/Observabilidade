@@ -57,7 +57,7 @@ jobs:
       - name: Executar make lint (Ruff + promtool + amtool)
         run: make lint
 
-      - name: Executar testes unitários da API instrumentada (Pytest >= 90% coverage)
+      - name: Executar testes unitários da API e do Webhook Receiver (Pytest >= 90% coverage)
         run: make test
 
   # ============================================================================

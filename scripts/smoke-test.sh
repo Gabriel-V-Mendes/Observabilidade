@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Smoke Test Completo da Stack de Observabilidade & SLOs
-# Valida: API (RED metrics), Receptor Externo de Webhooks (:8080), Prometheus,
+# Valida: API (RED metrics), Receptor Externo de Webhooks (:8081), Prometheus,
 # Node Exporter, Loki, Grafana Alloy, Alertmanager, Grafana e Runbooks.
 # ==============================================================================
 set -euo pipefail

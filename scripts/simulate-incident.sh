@@ -3,7 +3,7 @@
 # Exercício de Game Day — Simulação Controlada & Medição de TTD e TTR
 #
 # Arquitetura de medição real:
-#   - O receptor de webhooks (`webhook-receiver:8080`) roda em um contêiner
+#   - O receptor de webhooks (`webhook-receiver:8081`) roda em um contêiner
 #     separado da API monitorada (`fastapi-app:8000`).
 #   - O TTD (Time to Detect) só é considerado concluído quando a notificação
 #     do Alertmanager é EFETIVAMENTE ENTREGUE no contêiner `webhook-receiver`.
@@ -13,13 +13,13 @@
 #             Injeta falhas HTTP 500 via modo chaos e cronometra:
 #               a) Pico de Burn Rate (1m) medido no Prometheus;
 #               b) Transição para `firing` no Prometheus;
-#               c) TTD de entrega real da notificação em `webhook-receiver:8080`.
+#               c) TTD de entrega real da notificação em `webhook-receiver:8081`.
 #   Fase 2 -> Queda Proposital do Componente (`docker compose stop app`)
 #             Interrompe o contêiner `fastapi-app` e cronometra:
 #               a) Detecção de falha de scrape (`up == 0` -> `pending`);
 #               b) Disparo da regra `TargetDown` (`firing` no Prometheus);
 #               c) TTD de entrega real da notificação `TargetDown` no contêiner
-#                  separado `webhook-receiver:8080` (mesmo com a API fora do ar).
+#                  separado `webhook-receiver:8081` (mesmo com a API fora do ar).
 #   Fase 3 -> Recuperação (`docker compose start app`) e Medição de TTR
 #             Restaura o contêiner da API e cronometra o tempo até `up == 1`.
 # ==============================================================================

@@ -1,7 +1,7 @@
 # ==============================================================================
 # Alertmanager — Roteamento, Agrupamento, Inibição e Notificações
 #
-# O receptor webhook roda em um contêiner separado (`http://webhook-receiver:8080/webhook/alerts`),
+# O receptor webhook roda em um contêiner separado (`http://webhook-receiver:8081/webhook/alerts`),
 # fora da API monitorada (`fastapi-app`). Assim, mesmo quando `fastapi-app` sofre
 # queda total (`TargetDown`), o Alertmanager entrega a notificação normalmente e
 # o Tempo de Detecção (TTD) é medido até a notificação efetivamente entregue.
