@@ -198,7 +198,7 @@ services:
 
   # 8. Grafana — Visualização com Datasources e Dashboards provisionados via código (IaC)
   grafana:
-    image: grafana/grafana:13.3.0
+    image: grafana/grafana:13.3.1
     container_name: grafana
     ports:
       - "127.0.0.1:3000:3000"
