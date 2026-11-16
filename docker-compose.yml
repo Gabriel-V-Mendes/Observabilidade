@@ -124,7 +124,7 @@ services:
 
   # 5. Alertmanager — Deduplicação, agrupamento, inibição e roteamento para o webhook-receiver externo
   alertmanager:
-    image: prom/alertmanager:v0.34.2
+    image: prom/alertmanager:v0.35.0
     container_name: alertmanager
     ports:
       - "127.0.0.1:9093:9093"
