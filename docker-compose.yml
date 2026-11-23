@@ -100,7 +100,7 @@ services:
 
   # 4. Node Exporter — Métricas de hardware e SO do host (CPU, RAM, Disco, Rede)
   node-exporter:
-    image: prom/node-exporter:v1.12.1
+    image: prom/node-exporter:v1.13.1
     container_name: node-exporter
     ports:
       - "127.0.0.1:9100:9100"
